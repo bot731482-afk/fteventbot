@@ -1,0 +1,27 @@
+{
+  "name": "eon-funtime-helper",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Production-ready Telegram bot + admin panel for FunTime events",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "dev:stable": "pnpm --filter @eon/core-api dev",
+    "dev:web": "pnpm --filter @eon/admin-web dev",
+    "dev:bot": "pnpm --filter @eon/bot-service dev",
+    "dev:bot:clean": "powershell -ExecutionPolicy Bypass -File ./scripts/start-bot-clean.ps1",
+    "dev:workers": "pnpm --filter @eon/scheduler-worker dev",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/node-cron": "^3.0.11",
+    "typescript": "5.5.4"
+  }
+}

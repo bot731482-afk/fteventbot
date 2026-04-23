@@ -1,0 +1,142 @@
+:root{
+  --bg:#0b1020;
+  --panel:rgba(255,255,255,.06);
+  --panel2:rgba(255,255,255,.08);
+  --border:rgba(255,255,255,.12);
+  --text:rgba(255,255,255,.92);
+  --muted:rgba(255,255,255,.7);
+  --muted2:rgba(255,255,255,.55);
+  --danger:#ff5c70;
+  --ok:#2fe4a7;
+  --warn:#ffd15c;
+  --shadow:0 20px 60px rgba(0,0,0,.35);
+  --radius:14px;
+  --radius2:10px;
+  --focus:0 0 0 3px rgba(79,140,255,.35);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  color:var(--text);
+  background:
+    radial-gradient(1200px 800px at 10% 0%, rgba(110,168,255,.22), transparent 60%),
+    radial-gradient(1000px 700px at 90% 10%, rgba(255,110,193,.16), transparent 55%),
+    radial-gradient(900px 700px at 45% 100%, rgba(47,228,167,.12), transparent 55%),
+    var(--bg);
+}
+
+a{color:inherit}
+code{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size:.92em;
+  color:rgba(255,255,255,.86);
+}
+
+.container{max-width:1120px;margin:0 auto;padding:28px 18px 48px}
+.header{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px
+}
+.title{
+  display:flex;flex-direction:column;gap:6px
+}
+.title h1{margin:0;font-size:22px;letter-spacing:.2px}
+.title p{margin:0;color:var(--muted);line-height:1.35}
+
+.card{
+  background:linear-gradient(180deg,var(--panel),transparent 120%);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+.cardBody{padding:14px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.rowBetween{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.stack{display:flex;flex-direction:column;gap:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width: 760px){.grid2{grid-template-columns:1fr}}
+
+.label{font-size:12px;color:var(--muted2);margin-bottom:6px}
+.field{
+  width:100%;
+  padding:10px 12px;
+  border-radius:var(--radius2);
+  border:1px solid var(--border);
+  background:rgba(0,0,0,.18);
+  color:var(--text);
+  outline:none;
+}
+.field:focus{box-shadow:var(--focus);border-color:rgba(79,140,255,.55)}
+.textarea{min-height:76px;resize:vertical}
+.btn{
+  border:1px solid var(--border);
+  background:rgba(255,255,255,.06);
+  color:var(--text);
+  padding:10px 12px;
+  border-radius:12px;
+  cursor:pointer;
+  transition: transform .04s ease, background .12s ease, border-color .12s ease;
+}
+.btn:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.18)}
+.btn:active{transform:translateY(1px)}
+.btnPrimary{
+  background:linear-gradient(180deg,rgba(79,140,255,.38),rgba(79,140,255,.18));
+  border-color:rgba(79,140,255,.55);
+}
+.btnDanger{
+  background:linear-gradient(180deg,rgba(255,92,112,.28),rgba(255,92,112,.12));
+  border-color:rgba(255,92,112,.55);
+}
+.btnSmall{padding:8px 10px;border-radius:10px;font-size:13px}
+.pill{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 10px;border-radius:999px;
+  background:rgba(255,255,255,.06);
+  border:1px solid var(--border);
+  color:var(--muted);
+  font-size:13px;
+}
+.dot{width:8px;height:8px;border-radius:50%}
+.dotOk{background:var(--ok)}
+.dotWarn{background:var(--warn)}
+.dotBad{background:var(--danger)}
+
+.tabs{display:flex;gap:8px;flex-wrap:wrap}
+.tab{
+  border:1px solid var(--border);
+  background:rgba(255,255,255,.04);
+  color:var(--muted);
+  padding:9px 10px;
+  border-radius:999px;
+  cursor:pointer;
+  font-size:13px;
+}
+.tabActive{
+  background:rgba(255,255,255,.09);
+  color:var(--text);
+  border-color:rgba(255,255,255,.2);
+}
+.table{width:100%;border-collapse:separate;border-spacing:0 10px}
+.tr{
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--border);
+}
+.tr td{
+  padding:10px;
+  border-top:1px solid var(--border);
+  border-bottom:1px solid var(--border);
+}
+.tr td:first-child{border-left:1px solid var(--border);border-radius:12px 0 0 12px}
+.tr td:last-child{border-right:1px solid var(--border);border-radius:0 12px 12px 0}
+
+.muted{color:var(--muted)}
+.hint{color:var(--muted2);font-size:12px;line-height:1.35}
+.errorBox{
+  border:1px solid rgba(255,92,112,.55);
+  background:rgba(255,92,112,.10);
+  padding:10px 12px;border-radius:12px;
+  color:rgba(255,255,255,.92);
+  white-space:pre-wrap;
+}

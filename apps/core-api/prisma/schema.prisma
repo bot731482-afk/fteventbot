@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+enum EntitlementType {
+  FREE_PACK
+  PAID_PACK
+  UNLIMITED_LIFETIME
+}
+
+enum PlanKind {
+  VIEWS
+  UNLIMITED_LIFETIME
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  EXPIRED
+  FAILED
+}
+
+enum TxStatus {
+  PENDING
+  APPLIED
+  FAILED
+}
+
+model User {
+  id                   String   @id @default(cuid())
+  telegramId           BigInt   @unique
+  username             String?
+  isBanned             Boolean  @default(false)
+  freeViewsLeft        Int      @default(5)
+  isUnlimitedLifetime  Boolean  @default(false)
+  unlimitedGrantedAt   DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  entitlements         AccessEntitlement[]
+  notifications        UserNotification[]
+  invoices             BillingInvoice[]
+  transactions         BillingTransaction[]
+}
+
+model AccessEntitlement {
+  id          String          @id @default(cuid())
+  userId      String
+  type        EntitlementType
+  viewsTotal  Int?
+  viewsUsed   Int             @default(0)
+  expiresAt   DateTime?
+  createdAt   DateTime        @default(now())
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserNotification {
+  id                  String   @id @default(cuid())
+  userId              String
+  serverCode          String
+  notifyBeforeMinutes Int
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([serverCode, isActive])
+}
+
+model FunTimeServer {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  isActive   Boolean  @default(true)
+  lastSeenAt DateTime @default(now())
+}
+
+model FunTimeEventSnapshot {
+  id          String   @id @default(cuid())
+  serverCode  String
+  eventName   String
+  timeLeftSec Int
+  fetchedAt   DateTime
+
+  @@index([serverCode, fetchedAt])
+}
+
+model BillingInvoice {
+  id          String       @id @default(cuid())
+  userId      String
+  provider    String       @default("cryptobot")
+  invoiceId   String       @unique
+  status      InvoiceStatus
+  payload     Json
+  amount      Decimal
+  currency    String
+  productCode String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tx          BillingTransaction?
+}
+
+model BillingTransaction {
+  id                   String   @id @default(cuid())
+  userId               String
+  invoiceId            String   @unique
+  grantedEntitlementId String?
+  status               TxStatus
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoice              BillingInvoice @relation(fields: [invoiceId], references: [invoiceId], onDelete: Cascade)
+}
+
+model Plan {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  title       String
+  kind        PlanKind
+  price       Decimal
+  viewsAmount Int?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ContentBlock {
+  id        String   @id @default(cuid())
+  key       String
+  locale    String   @default("ru")
+  text      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key, locale])
+}
+
+model RequiredChannel {
+  id          String   @id @default(cuid())
+  tgChannelId String   @unique
+  username    String?
+  inviteLink  String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  description String?
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String
+  action    String
+  entity    String
+  metadata  Json
+  createdAt DateTime @default(now())
+}

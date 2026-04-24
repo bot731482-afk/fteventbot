@@ -192,9 +192,11 @@ async function launchWithRetry(): Promise<void> {
   }
   for (;;) {
     try {
+      console.log("before getMe");
+      const me = await bot.telegram.getMe();
+      console.log("getMe success:", me.username);
       console.log("before launch");
       await bot.launch();
-      console.log("after launch");
       console.log("bot launched");
       return;
     } catch (error) {

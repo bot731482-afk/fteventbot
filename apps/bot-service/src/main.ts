@@ -122,27 +122,9 @@ function getText(content: Record<string, string>, key: string, fallback: string)
   return content[key]?.trim() || fallback;
 }
 
-bot.start(async (ctx) => {
-  const config = await fetchBotConfig();
-  const telegramId = ctx.from.id;
-  const subscribed = await hasRequiredSubscription(telegramId, config);
-  if (!subscribed && (config.flags["enforce.required.channels"] ?? true)) {
-    const firstLink = config.channels.find((item) => item.inviteLink)?.inviteLink ?? "https://t.me";
-    await ctx.reply(
-      getText(config.content, "subscription.required.prompt", "Подпишитесь на обязательные каналы для использования бота"),
-      Markup.inlineKeyboard([
-        [Markup.button.url(getText(config.content, "subscription.required.button", "Подписаться"), firstLink)],
-        [Markup.button.callback(getText(config.content, "subscription.check.button", "Проверить подписку"), "check_sub")]
-      ])
-    );
-    return;
-  }
-
-  const buttons = config.menuButtons.length ? config.menuButtons : ["Ближайшие ивенты", "Уведомить меня", "Профиль", "Купить доступ"];
-  await ctx.reply(
-    getText(config.content, "menu.title", "Главное меню"),
-    Markup.keyboard(buttons.map((item) => [item])).resize()
-  );
+bot.start((ctx) => {
+  console.log("start command received");
+  ctx.reply("бот работает");
 });
 
 bot.action("check_sub", async (ctx) => {
@@ -196,10 +178,12 @@ async function launchWithRetry(): Promise<void> {
       const me = await bot.telegram.getMe();
       console.log("getMe success:", me.username);
       console.log("before launch");
-      await bot.launch({
-        dropPendingUpdates: true,
-        allowedUpdates: ["message", "callback_query"],
+      await bot.telegram.deleteWebhook({
+        drop_pending_updates: true,
       });
+      console.log("starting polling manually");
+      bot.startPolling();
+      console.log("polling started");
       console.log("bot launched");
       return;
     } catch (error) {

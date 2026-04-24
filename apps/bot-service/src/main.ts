@@ -149,17 +149,28 @@ async function startManualPolling(): Promise<void> {
   console.log("manual polling started");
   while (true) {
     try {
+      console.log("waiting updates, offset:", offset);
       const updates = await (bot.telegram as any).getUpdates({
         offset,
         timeout: 30,
+        limit: 100,
         allowed_updates: ["message", "callback_query"]
       });
+      console.log("updates fetched:", updates.length);
+      if (!updates.length) {
+        continue;
+      }
       for (const update of updates) {
         offset = update.update_id + 1;
-        console.log("update received:", update.update_id);
+        console.log("processing update:", update.update_id, update.update_type);
         await (bot as any).handleUpdate(update);
       }
     } catch (error) {
+      if (isConflict409(error)) {
+        console.warn("409 conflict detected");
+        await sleep(5000);
+        continue;
+      }
       console.error("polling error", error);
       await sleep(3000);
     }
@@ -181,6 +192,7 @@ async function launchWithRetry(): Promise<void> {
       } catch (error) {
         console.warn("deleteWebhook failed", error);
       }
+      await sleep(1500);
       console.log("before manual polling");
       await startManualPolling();
       return;

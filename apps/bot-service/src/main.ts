@@ -1,13 +1,14 @@
-import axios from "axios";
+import axios, { isAxiosError } from "axios";
 import path from "node:path";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { Markup, Telegraf } from "telegraf";
+import { Markup, Telegraf, type Context } from "telegraf";
 import { ConfigManager } from "./config";
 import { logRateLimited } from "./logger";
 import { startScheduler } from "./scheduler";
 import type { BotConfigV1 } from "@eon/shared-domain";
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const coreApiBaseUrl = (process.env.CORE_API_URL ?? "").trim();
+const botServiceSecret = (process.env.BOT_SERVICE_SECRET ?? "").trim();
 const paymentsMode = (process.env.PAYMENTS_MODE ?? "free").trim().toLowerCase();
 const botEnabled = (process.env.BOT_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const launchRetryMs = Math.max(1000, Number(process.env.BOT_LAUNCH_RETRY_MS ?? "30000") || 30000);
@@ -47,55 +48,133 @@ async function throttleCoreApi(): Promise<void> {
   }
 }
 
-async function coreApiGet<T>(path: string): Promise<T> {
+async function coreApiGet<T>(path: string, headers?: Record<string, string>): Promise<T> {
   if (!coreApiBaseUrl) {
     throw new Error("CORE_API_URL is not set");
   }
   await throttleCoreApi();
-  const response = await axios.get<T>(`${coreApiBaseUrl.replace(/\/$/, "")}${path}`, { timeout: 5000 });
+  const response = await axios.get<T>(`${coreApiBaseUrl.replace(/\/$/, "")}${path}`, { timeout: 5000, headers });
   return response.data;
 }
 
-async function hasRequiredSubscription(telegramId: number, config: BotConfigV1): Promise<boolean> {
-  const required = config.channels.filter((item: BotConfigV1["channels"][number]) => item.isActive && item.isRequired);
-  if (required.length === 0) return true;
-  for (const channel of required) {
+async function coreApiPost<T>(path: string, body: unknown): Promise<T> {
+  if (!coreApiBaseUrl) {
+    throw new Error("CORE_API_URL is not set");
+  }
+  if (!botServiceSecret) {
+    throw new Error("BOT_SERVICE_SECRET is not set");
+  }
+  await throttleCoreApi();
+  const response = await axios.post<T>(`${coreApiBaseUrl.replace(/\/$/, "")}${path}`, body, {
+    timeout: 8000,
+    headers: { "x-bot-service-secret": botServiceSecret, "content-type": "application/json" }
+  });
+  return response.data;
+}
+
+async function tryEnsureUser(telegramId: number, username: string | undefined): Promise<void> {
+  if (!coreApiBaseUrl) {
+    return;
+  }
+  if (!botServiceSecret) {
+    logRateLimited("warn", "user.ensure.missing_secret", "CORE_API_URL is set but BOT_SERVICE_SECRET is missing; user not synced", 300_000);
+    return;
+  }
+  try {
+    await coreApiPost<unknown>("/bot/telegram/ensure", { telegramId: String(telegramId), username: username || undefined });
+  } catch (error) {
+    logRateLimited("warn", "user.ensure.failed", `ensure user failed: ${String((error as { message?: string })?.message ?? error)}`, 60_000);
+  }
+}
+
+type SubscriptionState = "subscribed" | "not_subscribed" | "unknown";
+
+const subscriptionCheckCache = new Map<number, { at: number; result: SubscriptionState }>();
+
+async function getChatMemberOutcome(tgChannelId: string, telegramId: number): Promise<"member" | "not_member" | "error"> {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const tgChannelId = channel.tgChannelId ?? channel.username ?? "";
-      if (!tgChannelId) return true;
       const member = await bot.telegram.getChatMember(tgChannelId, telegramId);
-      if (!["creator", "administrator", "member"].includes(member.status)) {
-        return false;
+      if (["creator", "administrator", "member"].includes(member.status)) {
+        return "member";
       }
+      return "not_member";
     } catch {
-      return false;
+      if (attempt === 0) await sleep(400);
     }
   }
-  return true;
+  return "error";
+}
+
+async function getRequiredSubscriptionState(telegramId: number, config: BotConfigV1): Promise<SubscriptionState> {
+  const required = config.channels.filter((item: BotConfigV1["channels"][number]) => item.isActive && item.isRequired);
+  if (required.length === 0) {
+    return "subscribed";
+  }
+  const minRecheckSec = Math.max(0, Number(config.limits.subscriptionRecheckMinSeconds ?? 3) || 3);
+  const now = Date.now();
+  const cached = subscriptionCheckCache.get(telegramId);
+  if (cached && now - cached.at < minRecheckSec * 1000) {
+    return cached.result;
+  }
+  let sawError = false;
+  for (const channel of required) {
+    const tgChannelId = channel.tgChannelId ?? channel.username ?? "";
+    if (!tgChannelId) {
+      continue;
+    }
+    const o = await getChatMemberOutcome(tgChannelId, telegramId);
+    if (o === "not_member") {
+      const result: SubscriptionState = "not_subscribed";
+      subscriptionCheckCache.set(telegramId, { at: now, result });
+      return result;
+    }
+    if (o === "error") {
+      sawError = true;
+    }
+  }
+  const result: SubscriptionState = sawError ? "unknown" : "subscribed";
+  subscriptionCheckCache.set(telegramId, { at: now, result });
+  return result;
+}
+
+function defaultSubscriptionCheckFailedMessage(): string {
+  return "Не удалось проверить подписку. Попробуйте кнопку «Проверить подписку» снова через минуту.";
+}
+
+async function sendMainMenu(ctx: Context, config: BotConfigV1): Promise<void> {
+  const buttons = config.menuButtons.main.length ? config.menuButtons.main : ["Профиль", "События", "Поддержка"];
+  await ctx.reply(
+    config.content.startMessage,
+    Markup.keyboard(buttons.map((item: string) => [item])).resize()
+  );
 }
 
 bot.start(async (ctx) => {
   try {
     const config = getConfig();
     const telegramId = ctx.from.id;
-    const subscribed = config.flags.subscriptionsCheckEnabled ? await hasRequiredSubscription(telegramId, config) : true;
-    if (!subscribed && config.flags.subscriptionsCheckEnabled) {
-      const firstLink = config.channels.find((item) => item.isActive && item.isRequired)?.inviteLink ?? "https://t.me";
-      await ctx.reply(
-        config.content.subscriptionRequiredMessage,
-        Markup.inlineKeyboard([
-          [Markup.button.url("Подписаться", firstLink)],
-          [Markup.button.callback("Проверить подписку", "check_sub")]
-        ])
-      );
-      return;
+    const username = ctx.from?.username;
+    await tryEnsureUser(telegramId, username);
+    const firstLink = config.channels.find((item) => item.isActive && item.isRequired)?.inviteLink ?? "https://t.me";
+    const subKeyboard = Markup.inlineKeyboard([
+      [Markup.button.url("Подписаться", firstLink)],
+      [Markup.button.callback("Проверить подписку", "check_sub")]
+    ]);
+    if (config.flags.subscriptionsCheckEnabled) {
+      const subState = await getRequiredSubscriptionState(telegramId, config);
+      if (subState === "not_subscribed") {
+        await ctx.reply(config.content.subscriptionRequiredMessage, subKeyboard);
+        return;
+      }
+      if (subState === "unknown") {
+        const text =
+          config.content.subscriptionCheckFailedMessage?.trim() || defaultSubscriptionCheckFailedMessage();
+        await ctx.reply(text, subKeyboard);
+        return;
+      }
     }
-
-    const buttons = config.menuButtons.main.length ? config.menuButtons.main : ["Профиль", "События", "Поддержка"];
-    await ctx.reply(
-      config.content.startMessage,
-      Markup.keyboard(buttons.map((item: string) => [item])).resize()
-    );
+    await sendMainMenu(ctx, config);
   } catch (error) {
     console.error("start handler error", error);
     await ctx.reply("Временная ошибка. Попробуйте позже.");
@@ -104,15 +183,36 @@ bot.start(async (ctx) => {
 
 bot.action("check_sub", async (ctx) => {
   const config = getConfig();
-  const subscribed = config.flags.subscriptionsCheckEnabled ? await hasRequiredSubscription(ctx.from.id, config) : true;
-  await ctx.answerCbQuery(subscribed ? "Подписка подтверждена" : "Подписка не подтверждена");
+  const telegramId = ctx.from.id;
+  const username = ctx.from?.username;
+  await tryEnsureUser(telegramId, username);
+  if (!config.flags.subscriptionsCheckEnabled) {
+    await ctx.answerCbQuery("Готово");
+    await sendMainMenu(ctx, config);
+    return;
+  }
+  const subState = await getRequiredSubscriptionState(telegramId, config);
+  if (subState === "subscribed") {
+    await ctx.answerCbQuery("Подписка подтверждена");
+    await sendMainMenu(ctx, config);
+  } else if (subState === "unknown") {
+    await ctx.answerCbQuery("Проверка не удалась, попробуйте позже");
+  } else {
+    await ctx.answerCbQuery("Подписка не подтверждена");
+  }
 });
 
 bot.hears(/События|Открыть события|Ближайшие ивенты/i, async (ctx) => {
   const cooldown = enforceCooldown(ctx.from.id);
   if (!cooldown.ok) {
-    const cooldownSeconds = Math.max(0, Number(getConfig().limits.cooldownSeconds ?? 10) || 10);
-    await ctx.reply(`Подожди ${cooldown.waitSec} сек. (кд ${cooldownSeconds} сек)`);
+    const cfg = getConfig();
+    const custom = cfg.content.cooldownActiveMessage?.trim();
+    if (custom) {
+      await ctx.reply(custom.replaceAll("{waitSec}", String(cooldown.waitSec)));
+    } else {
+      const cooldownSeconds = Math.max(0, Number(cfg.limits.cooldownSeconds ?? 10) || 10);
+      await ctx.reply(`Подожди ${cooldown.waitSec} сек. (кд ${cooldownSeconds} сек)`);
+    }
     return;
   }
   const config = getConfig();
@@ -120,11 +220,37 @@ bot.hears(/События|Открыть события|Ближайшие ив�
     await ctx.reply(config.content.eventsUnavailableMessage);
     return;
   }
+  if (!coreApiBaseUrl || !botServiceSecret) {
+    logRateLimited("warn", "events.api.no_core", "CORE_API/BOT_SERVICE_SECRET not set; cannot load events from core-api", 120_000);
+    await ctx.reply(config.content.eventsUnavailableMessage);
+    return;
+  }
   try {
-    const response = await coreApiGet<{ items: Array<{ displayLabel: string }> }>("/bot/events/nearest");
+    const response = await coreApiPost<{ items: Array<{ displayLabel: string }> }>("/bot/events/nearest", {
+      telegramId: String(ctx.from.id)
+    });
     const lines = response.items.map((item: { displayLabel: string }) => item.displayLabel);
     await ctx.reply(lines.join("\n") || "Нет данных по ивентам");
   } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 429) {
+      const data = error.response.data as { denied?: { reason?: string; waitSec?: number }; message?: { denied?: { reason?: string; waitSec?: number } } };
+      const denied = typeof data?.message === "object" && data?.message?.denied ? data.message.denied : data?.denied;
+      const r = denied?.reason;
+      if (r === "DAILY_LIMIT") {
+        await ctx.reply(config.content.limitReachedMessage?.trim() || "Дневной лимит исчерпан.");
+        return;
+      }
+      if (r === "COOLDOWN") {
+        const w = denied?.waitSec;
+        const msg = config.content.cooldownActiveMessage?.trim() || (w != null ? `Подожди ${w} сек.` : "Слишком часто, подожди.");
+        await ctx.reply(msg);
+        return;
+      }
+    }
+    if (isAxiosError(error) && error.response?.status === 403) {
+      await ctx.reply("Нет доступа к просмотру ивентов. Проверь тариф / подписку.");
+      return;
+    }
     logRateLimited("warn", "events.api.unavailable", "API unavailable → using local fallback response for events", 60_000);
     await ctx.reply(config.content.eventsUnavailableMessage);
   }
@@ -355,7 +481,38 @@ async function launchWithRetry(): Promise<void> {
     try {
       configManager = await ConfigManager.create({ coreApiBaseUrl, remoteSyncIntervalMs: 60_000 });
       console.log("startup: config manager ready");
-      startScheduler({ configManager, enabled: schedulerEnabled });
+      startScheduler({
+        configManager,
+        enabled: schedulerEnabled,
+        onTick: async () => {
+          if (!coreApiBaseUrl || !botServiceSecret) {
+            return;
+          }
+          if (!getConfig().flags.notificationsEnabled) {
+            return;
+          }
+          try {
+            const res = await coreApiPost<{
+              enqueued: number;
+              items: Array<{ id: string; telegramId: string; body: string; kind: string }>;
+            }>("/bot/scheduler/tick", {});
+            const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+            for (const it of res.items) {
+              try {
+                await bot.telegram.sendMessage(it.telegramId, it.body);
+                results.push({ id: it.id, ok: true });
+              } catch (e) {
+                results.push({ id: it.id, ok: false, error: String((e as { message?: string })?.message ?? e) });
+              }
+            }
+            if (results.length) {
+              await coreApiPost("/bot/dispatch/ack", { results });
+            }
+          } catch (e) {
+            logRateLimited("warn", "scheduler.core", `scheduler: ${String((e as { message?: string })?.message ?? e)}`, 120_000);
+          }
+        }
+      });
       console.log(`startup: scheduler ${schedulerEnabled ? "enabled" : "disabled"}`);
       const me = await bot.telegram.getMe();
       console.log("startup: telegram identity verified", me.username);

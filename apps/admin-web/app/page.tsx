@@ -24,7 +24,29 @@ type ContentItem = { key: string; locale: string; text: string };
 type Flag = { key: string; enabled: boolean; description: string | null };
 
 type BotConfigHistoryEntry = { id: string; createdAt: string };
-type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config";
+type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config" | "users";
+
+type UserListItem = {
+  id: string;
+  telegramId: string;
+  username: string | null;
+  isBanned: boolean;
+  freeViewsLeft: number;
+  isUnlimitedLifetime: boolean;
+  access: { tier: string; canViewEvents: boolean };
+};
+
+type UserDetail = {
+  id: string;
+  telegramId: string;
+  username: string | null;
+  isBanned: boolean;
+  freeViewsLeft: number;
+  isUnlimitedLifetime: boolean;
+  lastEventQueryAt: string | null;
+  access: { tier: string; canViewEvents: boolean; reasons?: string[] };
+  recentDailyUsage: Array<{ dayUtc: string; count: number }>;
+};
 
 export default function HomePage() {
   const proxyMode = (process.env.NEXT_PUBLIC_ADMIN_PROXY_MODE ?? "false").trim().toLowerCase() === "true";
@@ -37,6 +59,9 @@ export default function HomePage() {
   const [tab, setTab] = useState<TabKey>("plans");
   const [botConfig, setBotConfig] = useState<BotConfigV1 | null>(null);
   const [botConfigHistory, setBotConfigHistory] = useState<BotConfigHistoryEntry[]>([]);
+  const [userQuery, setUserQuery] = useState("");
+  const [userItems, setUserItems] = useState<UserListItem[]>([]);
+  const [userDetail, setUserDetail] = useState<UserDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
@@ -165,6 +190,74 @@ export default function HomePage() {
       await request("/admin/bot-config/rollback", { method: "POST", body: JSON.stringify({ id }) });
       pushToast("Rollback выполнен");
       await loadBotConfig();
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function searchUsers(): Promise<void> {
+    try {
+      setLoading(true);
+      setErrorText(null);
+      const q = userQuery.trim();
+      const res = await request<{ items: UserListItem[] }>(`/admin/users?q=${encodeURIComponent(q)}&take=50`);
+      setUserItems(res.items);
+      setUserDetail(null);
+      pushToast(`Пользователей: ${res.items.length}`);
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadUserDetail(id: string): Promise<void> {
+    try {
+      setLoading(true);
+      setErrorText(null);
+      const d = await request<UserDetail>(`/admin/users/${encodeURIComponent(id)}`);
+      setUserDetail(d);
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function postUserAction(
+    subPath: string,
+    method: "POST" | "PATCH" | "DELETE" = "POST",
+    body?: unknown
+  ): Promise<void> {
+    if (!userDetail?.id) {
+      return;
+    }
+    const uid = userDetail.id;
+    try {
+      setLoading(true);
+      setErrorText(null);
+      await request(`/admin/users/${encodeURIComponent(uid)}${subPath}`, {
+        method,
+        body: body !== undefined ? JSON.stringify(body) : undefined
+      });
+      pushToast("Готово");
+      await loadUserDetail(uid);
+      void searchUsers();
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshFuntimeCache(): Promise<void> {
+    try {
+      setLoading(true);
+      setErrorText(null);
+      await request("/admin/funtime/refresh", { method: "POST" });
+      pushToast("FunTime: кэш обновлён");
     } catch (error) {
       setErrorText(String(error));
     } finally {
@@ -310,8 +403,21 @@ export default function HomePage() {
               <button className={`tab ${tab === "plans" ? "tabActive" : ""}`} onClick={() => setTab("plans")}>
                 Plans <span className="muted">({plans.length})</span>
               </button>
-              <button className={`tab ${tab === "channels" ? "tabActive" : ""}`} onClick={() => setTab("channels")}>
+              <button
+                className={`tab ${tab === "channels" ? "tabActive" : ""}`}
+                onClick={() => {
+                  setTab("channels");
+                }}
+              >
                 Channels <span className="muted">({channels.length})</span>
+              </button>
+              <button
+                className={`tab ${tab === "users" ? "tabActive" : ""}`}
+                onClick={() => {
+                  setTab("users");
+                }}
+              >
+                Users
               </button>
               <button className={`tab ${tab === "content" ? "tabActive" : ""}`} onClick={() => setTab("content")}>
                 Content <span className="muted">({contentItems.length})</span>
@@ -428,7 +534,8 @@ export default function HomePage() {
             <div className="stack" style={{ gap: 4 }}>
               <div style={{ fontSize: 16, fontWeight: 600 }}>Channels</div>
               <div className="hint">
-                Обязательные каналы. Если включён флаг <code>enforce.required.channels</code>, бот будет требовать подписку.
+                Каналы в БД (каталог). Живая «обязаловка» для бота настраивается в табе <strong>Bot config</strong> (поле{" "}
+                <code>channels</code> + <code>flags.subscriptionsCheckEnabled</code>).
               </div>
             </div>
 
@@ -489,6 +596,139 @@ export default function HomePage() {
                 </tbody>
               </table>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "users" ? (
+        <div className="card">
+          <div className="cardBody stack">
+            <div className="stack" style={{ gap: 4 }}>
+              <div style={{ fontSize: 16, fontWeight: 600 }}>Users</div>
+              <div className="hint">
+                Поиск по username или numeric Telegram id. Операции меняют состояние в PostgreSQL (не в BotConfig).
+              </div>
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                className="field"
+                style={{ minWidth: 220, flex: 1 }}
+                placeholder="Поиск…"
+                value={userQuery}
+                onChange={(e) => setUserQuery(e.target.value)}
+              />
+              <button className="btn btnPrimary" disabled={!isConfigured || loading} onClick={() => void searchUsers()}>
+                Найти
+              </button>
+              <button className="btn" disabled={!isConfigured || loading} onClick={() => void refreshFuntimeCache()}>
+                Обновить кэш ивентов
+              </button>
+            </div>
+            {userItems.length === 0 ? (
+              <div className="hint">Нет результатов. Выполни поиск.</div>
+            ) : (
+              <table className="table">
+                <tbody>
+                  {userItems.map((u) => (
+                    <tr key={u.id} className="tr">
+                      <td>
+                        <code>{u.telegramId}</code>
+                        <div className="hint">{u.username ?? "—"}</div>
+                      </td>
+                      <td>
+                        <span className="hint">tier: {u.access.tier}</span>
+                        {u.isBanned ? <div className="errorBox" style={{ marginTop: 6 }}>banned</div> : null}
+                      </td>
+                      <td style={{ width: 140 }}>
+                        <button
+                          className="btn btnPrimary btnSmall"
+                          disabled={!isConfigured || loading}
+                          onClick={() => void loadUserDetail(u.id)}
+                        >
+                          Открыть
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {userDetail ? (
+              <div className="card" style={{ boxShadow: "none" }}>
+                <div className="cardBody stack">
+                  <div className="label">Детали</div>
+                  <div className="hint mono" style={{ whiteSpace: "pre-wrap" }}>
+                    {JSON.stringify(
+                      {
+                        id: userDetail.id,
+                        telegramId: userDetail.telegramId,
+                        username: userDetail.username,
+                        tier: userDetail.access.tier,
+                        canViewEvents: userDetail.access.canViewEvents,
+                        reasons: userDetail.access.reasons,
+                        freeViewsLeft: userDetail.freeViewsLeft,
+                        isUnlimitedLifetime: userDetail.isUnlimitedLifetime,
+                        lastEventQueryAt: userDetail.lastEventQueryAt,
+                        recentDailyUsage: userDetail.recentDailyUsage
+                      },
+                      null,
+                      2
+                    )}
+                  </div>
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      className="btn btnPrimary btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/unlimited", "PATCH")}
+                    >
+                      Grant unlimited
+                    </button>
+                    <button
+                      className="btn btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/unlimited", "DELETE")}
+                    >
+                      Revoke unlimited
+                    </button>
+                    <button
+                      className="btn btnDanger btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/ban", "PATCH", { banned: true })}
+                    >
+                      Ban
+                    </button>
+                    <button
+                      className="btn btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/ban", "PATCH", { banned: false })}
+                    >
+                      Unban
+                    </button>
+                    <button
+                      className="btn btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/reset-cooldown", "POST")}
+                    >
+                      Reset cooldown
+                    </button>
+                    <button
+                      className="btn btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/reset-daily", "POST")}
+                    >
+                      Reset daily usage
+                    </button>
+                    <button
+                      className="btn btnSmall"
+                      disabled={!isConfigured || loading}
+                      onClick={() => void postUserAction("/test-notification", "POST")}
+                    >
+                      Test notification
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -5,7 +5,10 @@ export const BotConfigV1Schema = z.object({
     startMessage: z.string().min(1),
     subscriptionRequiredMessage: z.string().min(1),
     eventsUnavailableMessage: z.string().min(1),
-    supportMessage: z.string().min(1)
+    supportMessage: z.string().min(1),
+    subscriptionCheckFailedMessage: z.string().min(1).optional(),
+    limitReachedMessage: z.string().min(1).optional(),
+    cooldownActiveMessage: z.string().min(1).optional()
   }),
   menuButtons: z.object({
     main: z.array(z.string().min(1)).min(1),
@@ -30,7 +33,9 @@ export const BotConfigV1Schema = z.object({
     paymentsEnabled: z.boolean()
   }),
   limits: z.object({
-    cooldownSeconds: z.number().int().min(0).max(3600)
+    cooldownSeconds: z.number().int().min(0).max(3600),
+    dailyEventViewsMax: z.number().int().min(0).max(100000).default(30),
+    subscriptionRecheckMinSeconds: z.number().int().min(0).max(3600).default(3)
   })
 });
 
@@ -41,7 +46,11 @@ export const defaultBotConfigV1: BotConfigV1 = {
     startMessage: "Добро пожаловать в Event Helper",
     subscriptionRequiredMessage: "Для использования бота подпишитесь на обязательные каналы",
     eventsUnavailableMessage: "Сервис ивентов временно недоступен, попробуйте позже",
-    supportMessage: "По всем вопросам: @support"
+    supportMessage: "По всем вопросам: @support",
+    subscriptionCheckFailedMessage:
+      "Не удалось проверить подписку. Попробуйте кнопку «Проверить подписку» снова чуть позже.",
+    limitReachedMessage: "Сегодняшний лимит просмотров исчерпан. Завтра снова будет доступ.",
+    cooldownActiveMessage: "Слишком часто. Подожди немного и попробуй снова."
   },
   menuButtons: {
     main: ["Профиль", "События", "Поддержка"],
@@ -54,7 +63,7 @@ export const defaultBotConfigV1: BotConfigV1 = {
     notificationsEnabled: true,
     paymentsEnabled: false
   },
-  limits: { cooldownSeconds: 10 }
+  limits: { cooldownSeconds: 10, dailyEventViewsMax: 30, subscriptionRecheckMinSeconds: 3 }
 };
 
 export function validateBotConfigV1(input: unknown): BotConfigV1 {

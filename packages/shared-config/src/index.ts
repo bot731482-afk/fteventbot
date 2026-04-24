@@ -27,7 +27,8 @@ export const envSchema = z.object({
   BOT_POLLING_OFFSET_PATH: z.string().optional(),
   BOT_CONFIG_STORE_PATH: z.string().optional(),
   BOT_CONFIG_HISTORY_DIR: z.string().optional(),
-  PRISMA_ENABLED: z.string().optional()
+  PRISMA_ENABLED: z.string().optional(),
+  BOT_SERVICE_SECRET: z.string().min(8).optional()
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

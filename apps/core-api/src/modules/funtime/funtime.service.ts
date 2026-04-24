@@ -1,5 +1,5 @@
 import { Injectable, ServiceUnavailableException } from "@nestjs/common";
-import { EventsSnapshot, NearestEventView } from "@eon/shared-domain";
+import { EventsSnapshot, NearestEventView, type ServerEvents } from "@eon/shared-domain";
 import { CACHE_KEYS, LOCK_KEYS } from "@eon/shared-infra";
 import Redis from "ioredis";
 import { FunTimeGateway } from "./funtime.gateway";
@@ -46,7 +46,7 @@ export class FunTimeService {
       const snapshot: EventsSnapshot = {
         fetchedAt: new Date().toISOString(),
         stale: false,
-        items: responses.flat()
+        items: this.dedupeItems(responses.flat())
       };
 
       if (redis) {
@@ -82,17 +82,63 @@ export class FunTimeService {
     }
   }
 
+  /**
+   * Uses Redis `EVENTS_ALL` when present to avoid hitting FunTime on every read.
+   * On cache miss, performs a full refresh.
+   */
+  async getSnapshotForRead(): Promise<EventsSnapshot> {
+    const redis = this.redis;
+    if (redis) {
+      try {
+        const raw = await redis.get(CACHE_KEYS.EVENTS_ALL);
+        if (raw) {
+          return JSON.parse(raw) as EventsSnapshot;
+        }
+      } catch {
+        // continue to refresh
+      }
+    }
+    return this.refreshEventsSnapshot();
+  }
+
   async getNearestEvents(limit = 12): Promise<NearestEventView[]> {
-    const snapshot = await this.refreshEventsSnapshot();
+    const snapshot = await this.getSnapshotForRead();
+    return this.projectNearest(snapshot, limit);
+  }
+
+  private projectNearest(snapshot: EventsSnapshot, limit: number): NearestEventView[] {
     return snapshot.items
-      .map((item) => ({
-        server: item.server,
-        nearestTimeLeftSec: Math.min(...item.events.map((event) => event.timeLeftSec)),
-        displayLabel: `${item.server} — Ивент через ${Math.max(1, Math.floor(Math.min(...item.events.map((event) => event.timeLeftSec)) / 60))} минут`
-      }))
-      .filter((entry) => Number.isFinite(entry.nearestTimeLeftSec))
+      .map((item) => {
+        if (!item.events.length) {
+          return null;
+        }
+        const times = item.events.map((event) => event.timeLeftSec);
+        const nearestTimeLeftSec = Math.min(...times);
+        const minutes = Math.max(1, Math.floor(nearestTimeLeftSec / 60));
+        return {
+          server: item.server,
+          nearestTimeLeftSec,
+          displayLabel: `${item.server} — Ивент через ${minutes} минут`
+        };
+      })
+      .filter((entry): entry is NearestEventView => entry != null && Number.isFinite(entry.nearestTimeLeftSec))
       .sort((a, b) => a.nearestTimeLeftSec - b.nearestTimeLeftSec)
       .slice(0, limit);
+  }
+
+  private dedupeItems(items: ServerEvents[]): ServerEvents[] {
+    return items.map((block) => this.dedupeServerBlock(block));
+  }
+
+  private dedupeServerBlock(block: ServerEvents): ServerEvents {
+    const byName = new Map<string, (typeof block.events)[number]>();
+    for (const event of block.events) {
+      const prev = byName.get(event.eventName);
+      if (!prev || event.timeLeftSec < prev.timeLeftSec) {
+        byName.set(event.eventName, event);
+      }
+    }
+    return { server: block.server, events: [...byName.values()] };
   }
 
   private chunk<T>(items: T[], size: number): T[][] {

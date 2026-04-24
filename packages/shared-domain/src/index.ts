@@ -20,7 +20,7 @@ export interface EventsSnapshot {
 
 export type PlanKind = "views" | "unlimited_lifetime";
 
-export type EntitlementType = "free_pack" | "paid_pack" | "unlimited_lifetime";
+export type EntitlementType = "free_pack" | "paid_pack" | "unlimited_lifetime" | "admin_bypass" | "trial";
 
 export interface NearestEventView {
   server: string;
@@ -33,6 +33,24 @@ export interface UserNotificationRule {
   serverCode: string;
   notifyBeforeMinutes: 1 | 3 | 5;
   isActive: boolean;
+}
+
+export type UserAccessTier = "blocked" | "admin" | "unlimited" | "premium" | "trial" | "free";
+
+export interface UserAccessSnapshot {
+  tier: UserAccessTier;
+  canUseBot: boolean;
+  canViewEvents: boolean;
+  freeViewsLeft: number;
+  isBanned: boolean;
+  /** Human-readable, stable codes for support */
+  reasons: string[];
+}
+
+export interface EnsureUserResponse {
+  userId: string;
+  telegramId: string;
+  access: UserAccessSnapshot;
 }
 
 export { BotConfigV1Schema, defaultBotConfigV1, validateBotConfigV1 } from "./botConfig";

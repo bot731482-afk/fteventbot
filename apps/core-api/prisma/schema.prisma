@@ -12,6 +12,8 @@ enum EntitlementType {
   FREE_PACK
   PAID_PACK
   UNLIMITED_LIFETIME
+  ADMIN_BYPASS
+  TRIAL
 }
 
 enum PlanKind {
@@ -40,12 +42,15 @@ model User {
   freeViewsLeft        Int      @default(5)
   isUnlimitedLifetime  Boolean  @default(false)
   unlimitedGrantedAt   DateTime?
+  lastEventQueryAt     DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   entitlements         AccessEntitlement[]
   notifications        UserNotification[]
   invoices             BillingInvoice[]
   transactions         BillingTransaction[]
+  eventDailyUsages     EventDailyUsage[]
+  notificationOutbox   NotificationOutbox[]
 }
 
 model AccessEntitlement {
@@ -166,4 +171,38 @@ model AuditLog {
   entity    String
   metadata  Json
   createdAt DateTime @default(now())
+}
+
+model EventDailyUsage {
+  id     String   @id @default(cuid())
+  userId String
+  dayUtc DateTime
+  count  Int      @default(0)
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dayUtc])
+  @@index([dayUtc])
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model NotificationOutbox {
+  id         String       @id @default(cuid())
+  userId     String
+  telegramId BigInt
+  dedupeKey  String       @unique
+  body       String
+  kind       String
+  status     OutboxStatus @default(PENDING)
+  error      String?
+  createdAt  DateTime     @default(now())
+  sentAt     DateTime?
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
 }

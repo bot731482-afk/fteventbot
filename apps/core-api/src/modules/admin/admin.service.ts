@@ -1,5 +1,7 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { FeatureFlag, Plan, PlanKind, Prisma } from "@prisma/client";
+import type { UserAccessSnapshot } from "@eon/shared-domain";
+import { AccessService } from "../access/access.service";
 import { PrismaService } from "../prisma/prisma.service";
 
 type OwnerActor = { actor: string };
@@ -21,7 +23,52 @@ type FlagUpdateInput = { description?: string | null; enabled: boolean };
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: AccessService
+  ) {}
+
+  async listUsers(
+    q?: string,
+    take = 30
+  ): Promise<{
+    items: Array<{
+      id: string;
+      telegramId: string;
+      username: string | null;
+      isBanned: boolean;
+      freeViewsLeft: number;
+      isUnlimitedLifetime: boolean;
+      createdAt: Date;
+      access: UserAccessSnapshot;
+    }>;
+  }> {
+    const t = (q ?? "").trim();
+    const where: Prisma.UserWhereInput = t
+      ? /^\d{4,20}$/.test(t)
+        ? { telegramId: BigInt(t) }
+        : { username: { contains: t, mode: "insensitive" } }
+      : {};
+    const cap = Math.min(100, Math.max(1, take));
+    const rows = await this.prisma.user.findMany({
+      where,
+      take: cap,
+      orderBy: { updatedAt: "desc" },
+      include: { entitlements: true }
+    });
+    return {
+      items: rows.map((u) => ({
+        id: u.id,
+        telegramId: String(u.telegramId),
+        username: u.username,
+        isBanned: u.isBanned,
+        freeViewsLeft: u.freeViewsLeft,
+        isUnlimitedLifetime: u.isUnlimitedLifetime,
+        createdAt: u.createdAt,
+        access: this.access.resolve(u)
+      }))
+    };
+  }
 
   async getDashboard(): Promise<object> {
     const [total, unlimited, activeNotifications, invoicesPaid, revenue] = await Promise.all([
@@ -193,6 +240,101 @@ export class AdminService {
     }
     if (input.enabled !== undefined) data.enabled = input.enabled;
     return data;
+  }
+
+  async getUserById(owner: OwnerActor, id: string): Promise<object> {
+    void owner;
+    if (!id) {
+      throw new BadRequestException("id is required");
+    }
+    const u = await this.prisma.user.findUnique({
+      where: { id },
+      include: {
+        entitlements: { orderBy: { createdAt: "desc" } },
+        eventDailyUsages: { orderBy: { dayUtc: "desc" }, take: 14 },
+        notifications: { where: { isActive: true } }
+      }
+    });
+    if (!u) {
+      throw new NotFoundException("user not found");
+    }
+    return {
+      id: u.id,
+      telegramId: String(u.telegramId),
+      username: u.username,
+      isBanned: u.isBanned,
+      freeViewsLeft: u.freeViewsLeft,
+      isUnlimitedLifetime: u.isUnlimitedLifetime,
+      unlimitedGrantedAt: u.unlimitedGrantedAt,
+      lastEventQueryAt: u.lastEventQueryAt,
+      createdAt: u.createdAt,
+      access: this.access.resolve(u),
+      entitlements: u.entitlements,
+      recentDailyUsage: u.eventDailyUsages,
+      notificationRules: u.notifications
+    };
+  }
+
+  async grantUnlimited(owner: OwnerActor, userId: string): Promise<object> {
+    const u = await this.prisma.user.update({
+      where: { id: userId },
+      data: { isUnlimitedLifetime: true, unlimitedGrantedAt: new Date() },
+      include: { entitlements: true }
+    });
+    await this.log(owner, "user.grant_unlimited", "User", u.id, {});
+    return { ok: true, access: this.access.resolve(u) };
+  }
+
+  async revokeUnlimited(owner: OwnerActor, userId: string): Promise<object> {
+    const u = await this.prisma.user.update({
+      where: { id: userId },
+      data: { isUnlimitedLifetime: false },
+      include: { entitlements: true }
+    });
+    await this.log(owner, "user.revoke_unlimited", "User", u.id, {});
+    return { ok: true, access: this.access.resolve(u) };
+  }
+
+  async setUserBanned(owner: OwnerActor, userId: string, banned: boolean): Promise<object> {
+    const u = await this.prisma.user.update({
+      where: { id: userId },
+      data: { isBanned: banned },
+      include: { entitlements: true }
+    });
+    await this.log(owner, banned ? "user.ban" : "user.unban", "User", u.id, { banned });
+    return { ok: true, access: this.access.resolve(u) };
+  }
+
+  async resetEventCooldown(owner: OwnerActor, userId: string): Promise<object> {
+    await this.prisma.user.update({ where: { id: userId }, data: { lastEventQueryAt: null } });
+    await this.log(owner, "user.reset_cooldown", "User", userId, {});
+    return { ok: true };
+  }
+
+  async resetDailyUsage(owner: OwnerActor, userId: string): Promise<object> {
+    const deleted = await this.prisma.eventDailyUsage.deleteMany({ where: { userId } });
+    await this.log(owner, "user.reset_daily_usage", "User", userId, { deleted: deleted.count });
+    return { ok: true, deleted: deleted.count };
+  }
+
+  async enqueueTestNotification(owner: OwnerActor, userId: string): Promise<object> {
+    const u = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!u) {
+      throw new NotFoundException("user not found");
+    }
+    const dedupeKey = `test:${u.id}:${Date.now()}`;
+    await this.prisma.notificationOutbox.create({
+      data: {
+        userId: u.id,
+        telegramId: u.telegramId,
+        dedupeKey,
+        body: "Тестовое уведомление от админки",
+        kind: "admin_test",
+        status: "PENDING"
+      }
+    });
+    await this.log(owner, "user.test_notification", "User", u.id, { dedupeKey });
+    return { ok: true, dedupeKey };
   }
 
   private async log(owner: OwnerActor, action: string, entity: string, entityId: string, metadata: object): Promise<void> {

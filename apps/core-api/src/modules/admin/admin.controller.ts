@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UnauthorizedException
 } from "@nestjs/common";
 import { PlanKind } from "@prisma/client";
@@ -38,16 +39,86 @@ export class AdminController {
     };
   }
 
-  @Get("users")
-  users(@Headers("x-owner-admin-id") ownerAdminId?: string): object {
+  @Post("funtime/refresh")
+  async funtimeRefresh(@Headers("x-owner-admin-id") ownerAdminId?: string): Promise<object> {
     this.assertOwner(ownerAdminId);
-    return { items: [] };
+    const snapshot = await this.funtimeService.refreshEventsSnapshot();
+    return { ok: true, fetchedAt: snapshot.fetchedAt, stale: snapshot.stale, servers: snapshot.items.length };
+  }
+
+  @Get("users")
+  users(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Query("q") q?: string,
+    @Query("take") take?: string
+  ): Promise<object> {
+    this.assertOwner(ownerAdminId);
+    const n = take != null && take !== "" ? Number(take) : 30;
+    return this.adminService.listUsers(q, Number.isInteger(n) ? n : 30);
+  }
+
+  @Get("users/:id")
+  getUser(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.getUserById({ actor }, id ?? "");
   }
 
   @Patch("users/:id/unlimited")
-  grantUnlimited(@Headers("x-owner-admin-id") ownerAdminId?: string): object {
-    this.assertOwner(ownerAdminId);
-    return { ok: true, action: "grant_unlimited_lifetime" };
+  grantUnlimited(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.grantUnlimited({ actor }, id ?? "");
+  }
+
+  @Delete("users/:id/unlimited")
+  revokeUnlimited(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.revokeUnlimited({ actor }, id ?? "");
+  }
+
+  @Patch("users/:id/ban")
+  setUserBan(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string,
+    @Body() body?: { banned?: boolean }
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.setUserBanned({ actor }, id ?? "", body?.banned ?? true);
+  }
+
+  @Post("users/:id/reset-cooldown")
+  resetUserCooldown(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.resetEventCooldown({ actor }, id ?? "");
+  }
+
+  @Post("users/:id/reset-daily")
+  resetUserDaily(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.resetDailyUsage({ actor }, id ?? "");
+  }
+
+  @Post("users/:id/test-notification")
+  testUserNotification(
+    @Headers("x-owner-admin-id") ownerAdminId: string | undefined,
+    @Param("id") id?: string
+  ): Promise<object> {
+    const actor = this.assertOwner(ownerAdminId);
+    return this.adminService.enqueueTestNotification({ actor }, id ?? "");
   }
 
   @Get("plans")

@@ -27,7 +27,7 @@ type BotConfigHistoryEntry = { id: string; createdAt: string };
 type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config";
 
 export default function HomePage() {
-  const [apiBaseUrl, setApiBaseUrl] = useState("http://localhost:3000/v1");
+  const [apiBaseUrl, setApiBaseUrl] = useState(process.env.NEXT_PUBLIC_CORE_API_URL ?? "http://localhost:3000/v1");
   const [ownerId, setOwnerId] = useState("");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -36,7 +36,6 @@ export default function HomePage() {
   const [tab, setTab] = useState<TabKey>("plans");
   const [botConfig, setBotConfig] = useState<BotConfigV1 | null>(null);
   const [botConfigHistory, setBotConfigHistory] = useState<BotConfigHistoryEntry[]>([]);
-  const [botConfigDraft, setBotConfigDraft] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
@@ -127,7 +126,6 @@ export default function HomePage() {
       const res = await request<{ config: BotConfigV1; history: BotConfigHistoryEntry[] }>("/admin/bot-config");
       setBotConfig(res.config);
       setBotConfigHistory(res.history);
-      setBotConfigDraft(JSON.stringify(res.config, null, 2));
       setLastLoadedAt(Date.now());
       pushToast("Bot config загружен");
     } catch (error) {
@@ -141,8 +139,7 @@ export default function HomePage() {
     try {
       setLoading(true);
       setErrorText(null);
-      const parsedJson = JSON.parse(botConfigDraft || "{}");
-      const parsed = BotConfigV1Schema.safeParse(parsedJson);
+      const parsed = BotConfigV1Schema.safeParse(botConfig);
       if (!parsed.success) {
         const msg = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
         throw new Error(msg);
@@ -169,6 +166,41 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function updateBotConfig(updater: (prev: BotConfigV1) => BotConfigV1): void {
+    setBotConfig((prev) => {
+      if (!prev) return prev;
+      const next = updater(prev);
+      return next;
+    });
+  }
+
+  function addMainMenuButton(): void {
+    updateBotConfig((prev) => ({ ...prev, menuButtons: { ...prev.menuButtons, main: [...prev.menuButtons.main, "Новая кнопка"] } }));
+  }
+
+  function addAfterSubscriptionButton(): void {
+    updateBotConfig((prev) => ({
+      ...prev,
+      menuButtons: { ...prev.menuButtons, afterSubscription: [...prev.menuButtons.afterSubscription, "Новая кнопка"] }
+    }));
+  }
+
+  function addChannel(): void {
+    updateBotConfig((prev) => ({
+      ...prev,
+      channels: [
+        ...prev.channels,
+        {
+          title: "Новый канал",
+          username: "@new_channel",
+          inviteLink: "https://t.me/new_channel",
+          isRequired: true,
+          isActive: true
+        }
+      ]
+    }));
   }
 
   async function savePlan(plan: Plan): Promise<void> {
@@ -566,17 +598,274 @@ export default function HomePage() {
                 </button>
               </div>
             </div>
+            {botConfig ? (
+              <div className="stack" style={{ gap: 16 }}>
+                <div className="card" style={{ boxShadow: "none" }}>
+                  <div className="cardBody stack">
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>Content</div>
+                    <div className="label">startMessage</div>
+                    <textarea
+                      className="field textarea"
+                      value={botConfig.content.startMessage}
+                      onChange={(e) => updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, startMessage: e.target.value } }))}
+                    />
+                    <div className="label">subscriptionRequiredMessage</div>
+                    <textarea
+                      className="field textarea"
+                      value={botConfig.content.subscriptionRequiredMessage}
+                      onChange={(e) =>
+                        updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, subscriptionRequiredMessage: e.target.value } }))
+                      }
+                    />
+                    <div className="label">eventsUnavailableMessage</div>
+                    <textarea
+                      className="field textarea"
+                      value={botConfig.content.eventsUnavailableMessage}
+                      onChange={(e) =>
+                        updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, eventsUnavailableMessage: e.target.value } }))
+                      }
+                    />
+                    <div className="label">supportMessage</div>
+                    <textarea
+                      className="field textarea"
+                      value={botConfig.content.supportMessage}
+                      onChange={(e) => updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, supportMessage: e.target.value } }))}
+                    />
+                  </div>
+                </div>
 
-            <textarea
-              className="field textarea"
-              value={botConfigDraft}
-              onChange={(e) => setBotConfigDraft(e.target.value)}
-              placeholder="{ ... BotConfigV1 ... }"
-              style={{ minHeight: 320 }}
-            />
+                <div className="card" style={{ boxShadow: "none" }}>
+                  <div className="cardBody stack">
+                    <div className="rowBetween">
+                      <div style={{ fontSize: 15, fontWeight: 600 }}>Menu Buttons</div>
+                      <div className="row">
+                        <button className="btn btnPrimary btnSmall" type="button" onClick={addMainMenuButton}>
+                          + Main
+                        </button>
+                        <button className="btn btnPrimary btnSmall" type="button" onClick={addAfterSubscriptionButton}>
+                          + AfterSub
+                        </button>
+                      </div>
+                    </div>
+                    <div className="label">main</div>
+                    {botConfig.menuButtons.main.map((btn, idx) => (
+                      <div key={`main-${idx}`} className="row">
+                        <input
+                          className="field"
+                          value={btn}
+                          onChange={(e) =>
+                            updateBotConfig((prev) => {
+                              const next = [...prev.menuButtons.main];
+                              next[idx] = e.target.value;
+                              return { ...prev, menuButtons: { ...prev.menuButtons, main: next } };
+                            })
+                          }
+                        />
+                        <button
+                          className="btn btnDanger btnSmall"
+                          type="button"
+                          onClick={() =>
+                            updateBotConfig((prev) => ({
+                              ...prev,
+                              menuButtons: { ...prev.menuButtons, main: prev.menuButtons.main.filter((_, i) => i !== idx) }
+                            }))
+                          }
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                    <div className="label">afterSubscription</div>
+                    {botConfig.menuButtons.afterSubscription.map((btn, idx) => (
+                      <div key={`after-${idx}`} className="row">
+                        <input
+                          className="field"
+                          value={btn}
+                          onChange={(e) =>
+                            updateBotConfig((prev) => {
+                              const next = [...prev.menuButtons.afterSubscription];
+                              next[idx] = e.target.value;
+                              return { ...prev, menuButtons: { ...prev.menuButtons, afterSubscription: next } };
+                            })
+                          }
+                        />
+                        <button
+                          className="btn btnDanger btnSmall"
+                          type="button"
+                          onClick={() =>
+                            updateBotConfig((prev) => ({
+                              ...prev,
+                              menuButtons: {
+                                ...prev.menuButtons,
+                                afterSubscription: prev.menuButtons.afterSubscription.filter((_, i) => i !== idx)
+                              }
+                            }))
+                          }
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="card" style={{ boxShadow: "none" }}>
+                  <div className="cardBody stack">
+                    <div className="rowBetween">
+                      <div style={{ fontSize: 15, fontWeight: 600 }}>Channels</div>
+                      <button className="btn btnPrimary btnSmall" type="button" onClick={addChannel}>
+                        + Channel
+                      </button>
+                    </div>
+                    {botConfig.channels.map((channel, idx) => (
+                      <div key={`ch-${idx}`} className="card" style={{ boxShadow: "none" }}>
+                        <div className="cardBody stack">
+                          <input
+                            className="field"
+                            value={channel.title}
+                            onChange={(e) =>
+                              updateBotConfig((prev) => {
+                                const next = [...prev.channels];
+                                next[idx] = { ...next[idx], title: e.target.value };
+                                return { ...prev, channels: next };
+                              })
+                            }
+                            placeholder="title"
+                          />
+                          <input
+                            className="field"
+                            value={channel.username}
+                            onChange={(e) =>
+                              updateBotConfig((prev) => {
+                                const next = [...prev.channels];
+                                next[idx] = { ...next[idx], username: e.target.value };
+                                return { ...prev, channels: next };
+                              })
+                            }
+                            placeholder="@username"
+                          />
+                          <input
+                            className="field"
+                            value={channel.inviteLink}
+                            onChange={(e) =>
+                              updateBotConfig((prev) => {
+                                const next = [...prev.channels];
+                                next[idx] = { ...next[idx], inviteLink: e.target.value };
+                                return { ...prev, channels: next };
+                              })
+                            }
+                            placeholder="https://t.me/..."
+                          />
+                          <div className="row">
+                            <label className="row" style={{ gap: 8 }}>
+                              <input
+                                type="checkbox"
+                                checked={channel.isRequired}
+                                onChange={(e) =>
+                                  updateBotConfig((prev) => {
+                                    const next = [...prev.channels];
+                                    next[idx] = { ...next[idx], isRequired: e.target.checked };
+                                    return { ...prev, channels: next };
+                                  })
+                                }
+                              />
+                              isRequired
+                            </label>
+                            <label className="row" style={{ gap: 8 }}>
+                              <input
+                                type="checkbox"
+                                checked={channel.isActive}
+                                onChange={(e) =>
+                                  updateBotConfig((prev) => {
+                                    const next = [...prev.channels];
+                                    next[idx] = { ...next[idx], isActive: e.target.checked };
+                                    return { ...prev, channels: next };
+                                  })
+                                }
+                              />
+                              isActive
+                            </label>
+                          </div>
+                          <button
+                            className="btn btnDanger btnSmall"
+                            type="button"
+                            onClick={() =>
+                              updateBotConfig((prev) => ({ ...prev, channels: prev.channels.filter((_, i) => i !== idx) }))
+                            }
+                          >
+                            Удалить канал
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="card" style={{ boxShadow: "none" }}>
+                  <div className="cardBody stack">
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>Flags & Limits</div>
+                    <label className="row" style={{ gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={botConfig.flags.subscriptionsCheckEnabled}
+                        onChange={(e) =>
+                          updateBotConfig((prev) => ({
+                            ...prev,
+                            flags: { ...prev.flags, subscriptionsCheckEnabled: e.target.checked }
+                          }))
+                        }
+                      />
+                      subscriptionsCheckEnabled
+                    </label>
+                    <label className="row" style={{ gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={botConfig.flags.eventsEnabled}
+                        onChange={(e) => updateBotConfig((prev) => ({ ...prev, flags: { ...prev.flags, eventsEnabled: e.target.checked } }))}
+                      />
+                      eventsEnabled
+                    </label>
+                    <label className="row" style={{ gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={botConfig.flags.notificationsEnabled}
+                        onChange={(e) =>
+                          updateBotConfig((prev) => ({ ...prev, flags: { ...prev.flags, notificationsEnabled: e.target.checked } }))
+                        }
+                      />
+                      notificationsEnabled
+                    </label>
+                    <label className="row" style={{ gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={botConfig.flags.paymentsEnabled}
+                        onChange={(e) => updateBotConfig((prev) => ({ ...prev, flags: { ...prev.flags, paymentsEnabled: e.target.checked } }))}
+                      />
+                      paymentsEnabled
+                    </label>
+                    <div className="label">cooldownSeconds</div>
+                    <input
+                      className="field"
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={botConfig.limits.cooldownSeconds}
+                      onChange={(e) =>
+                        updateBotConfig((prev) => ({
+                          ...prev,
+                          limits: { ...prev.limits, cooldownSeconds: Math.max(0, Number(e.target.value) || 0) }
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="hint">Нажми “Обновить”, чтобы загрузить Bot config.</div>
+            )}
 
             <details>
-              <summary className="hint">Preview (parsed)</summary>
+              <summary className="hint">JSON preview</summary>
               <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{botConfig ? JSON.stringify(botConfig, null, 2) : "not loaded"}</pre>
             </details>
 

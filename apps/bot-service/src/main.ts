@@ -1,4 +1,6 @@
 import axios from "axios";
+import path from "node:path";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { Markup, Telegraf } from "telegraf";
 import { ConfigManager } from "./config";
 import { logRateLimited } from "./logger";
@@ -154,8 +156,113 @@ function sleep(ms: number): Promise<void> {
 }
 
 let offset = 0;
+const processedUpdateIds = new Set<number>();
+const processedUpdateOrder: number[] = [];
+const maxRememberedUpdates = 5000;
+const offsetStatePath = process.env.BOT_POLLING_OFFSET_PATH?.trim() || path.resolve(__dirname, "..", "bot-polling.offset.json");
+
+function rememberProcessedUpdate(updateId: number): void {
+  if (processedUpdateIds.has(updateId)) return;
+  processedUpdateIds.add(updateId);
+  processedUpdateOrder.push(updateId);
+  if (processedUpdateOrder.length > maxRememberedUpdates) {
+    const oldest = processedUpdateOrder.shift();
+    if (oldest !== undefined) {
+      processedUpdateIds.delete(oldest);
+    }
+  }
+}
+
+function getUpdatePreview(update: any): string {
+  const text = update?.message?.text ?? update?.callback_query?.data ?? update?.callback_query?.message?.text;
+  if (!text) return "-";
+  return String(text).replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function getUpdateKind(update: any): string {
+  if (update?.callback_query) return "callback_query";
+  if (update?.message?.text?.startsWith?.("/")) return "command";
+  if (update?.message) return "message";
+  if (update?.edited_message) return "edited_message";
+  return "other";
+}
+
+function getUpdateMeta(update: any): {
+  updateId: number;
+  kind: string;
+  preview: string;
+  chatId: number | null;
+  userId: number | null;
+} {
+  return {
+    updateId: Number(update?.update_id ?? -1),
+    kind: getUpdateKind(update),
+    preview: getUpdatePreview(update),
+    chatId: update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? null,
+    userId: update?.from?.id ?? update?.message?.from?.id ?? update?.callback_query?.from?.id ?? null
+  };
+}
+
+async function loadOffsetState(): Promise<void> {
+  try {
+    const raw = await readFile(offsetStatePath, "utf8");
+    const parsed = JSON.parse(raw) as { offset?: number };
+    const next = Number(parsed.offset ?? 0);
+    if (Number.isInteger(next) && next >= 0) {
+      offset = next;
+    }
+  } catch {
+    // first launch or missing/corrupted state file
+  }
+}
+
+async function persistOffsetState(): Promise<void> {
+  const tmpPath = `${offsetStatePath}.tmp`;
+  await writeFile(tmpPath, JSON.stringify({ offset }, null, 2), "utf8");
+  await rename(tmpPath, offsetStatePath);
+}
+
+async function processUpdate(update: any): Promise<void> {
+  const meta = getUpdateMeta(update);
+  const updateId = meta.updateId;
+  const nextOffset = updateId + 1;
+
+  if (!Number.isInteger(updateId) || updateId < 0) {
+    console.error("[polling] skip invalid update_id", meta);
+    return;
+  }
+
+  if (processedUpdateIds.has(updateId)) {
+    if (offset < nextOffset) {
+      offset = nextOffset;
+      await persistOffsetState().catch(() => undefined);
+    }
+    console.log("[polling] duplicate update skipped", { ...meta, offset });
+    return;
+  }
+
+  let ok = false;
+  console.log("[polling] update received", meta);
+  try {
+    await (bot as any).handleUpdate(update);
+    ok = true;
+  } catch (error) {
+    // Do not rethrow: poison update must not block the queue forever.
+    console.error("[polling] update handling failed", { ...meta, error });
+  } finally {
+    // Ack update deterministically after processing attempt.
+    if (offset < nextOffset) {
+      offset = nextOffset;
+      await persistOffsetState().catch(() => undefined);
+    }
+    rememberProcessedUpdate(updateId);
+    console.log("[polling] update ack", { updateId, ok, offset });
+  }
+}
+
 async function startManualPolling(): Promise<void> {
   console.log("manual polling started");
+  await loadOffsetState();
   while (true) {
     try {
       console.log("waiting updates, offset:", offset);
@@ -170,9 +277,7 @@ async function startManualPolling(): Promise<void> {
         continue;
       }
       for (const update of updates) {
-        offset = update.update_id + 1;
-        console.log("processing update:", update.update_id, update.update_type);
-        await (bot as any).handleUpdate(update);
+        await processUpdate(update);
       }
     } catch (error) {
       if (isConflict409(error)) {

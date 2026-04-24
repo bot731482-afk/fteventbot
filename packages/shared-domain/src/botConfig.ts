@@ -63,12 +63,6 @@ export function validateBotConfigV1(input: unknown): BotConfigV1 {
     const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
     throw new Error(`Invalid BotConfigV1: ${issues}`);
   }
-
-  const cfg = parsed.data;
-  const activeRequired = cfg.channels.filter((c) => c.isActive && c.isRequired);
-  if (cfg.flags.subscriptionsCheckEnabled && activeRequired.length === 0) {
-    throw new Error("Invalid BotConfigV1: subscriptionsCheckEnabled=true but no active required channels");
-  }
-  return cfg;
+  return parsed.data;
 }
 

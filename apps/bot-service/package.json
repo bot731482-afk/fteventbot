@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx -r dotenv/config src/main.ts dotenv_config_path=../../.env",
+    "start": "node -r dotenv/config dist/main.js dotenv_config_path=../../.env",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""

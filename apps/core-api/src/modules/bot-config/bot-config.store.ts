@@ -3,11 +3,12 @@ import path from "node:path";
 import { defaultBotConfigV1, validateBotConfigV1, type BotConfigV1 } from "@eon/shared-domain";
 
 function resolveInApp(filename: string): string {
-  return path.resolve(process.cwd(), filename);
+  const appDir = path.resolve(__dirname, "../../..");
+  return path.resolve(appDir, filename);
 }
 
-const storePath = resolveInApp("bot-config.store.json");
-const historyDir = resolveInApp("bot-config.history");
+const storePath = process.env.BOT_CONFIG_STORE_PATH?.trim() || resolveInApp("bot-config.store.json");
+const historyDir = process.env.BOT_CONFIG_HISTORY_DIR?.trim() || resolveInApp("bot-config.history");
 
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   const dir = path.dirname(filePath);

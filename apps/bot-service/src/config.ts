@@ -4,14 +4,19 @@ import type { BotConfigV1 } from "@eon/shared-domain";
 import { logRateLimited } from "./logger";
 import { tryFetchRemoteConfig } from "./remoteConfig";
 import { validateBotConfigV1 } from "@eon/shared-domain";
+import { defaultBotConfigV1 } from "@eon/shared-domain";
 
-function resolveInServiceDir(filename: string): string {
-  // When run via pnpm --filter, cwd is typically apps/bot-service
-  return path.resolve(process.cwd(), filename);
+function getServiceDir(): string {
+  // src/* in dev, dist/* in production
+  return path.resolve(__dirname, "..");
 }
 
-const fallbackPath = resolveInServiceDir("bot-config.json");
-const cachePath = resolveInServiceDir("bot-config.cache.json");
+function resolveInServiceDir(filename: string): string {
+  return path.resolve(getServiceDir(), filename);
+}
+
+const fallbackPath = process.env.BOT_CONFIG_PATH?.trim() || resolveInServiceDir("bot-config.json");
+const cachePath = process.env.BOT_CONFIG_CACHE_PATH?.trim() || resolveInServiceDir("bot-config.cache.json");
 
 async function readJsonFile<T>(filePath: string): Promise<T> {
   const raw = await readFile(filePath, "utf8");
@@ -47,7 +52,12 @@ export class ConfigManager {
   }
 
   static async create(options: ConfigManagerOptions): Promise<ConfigManager> {
-    const fallback = validateBotConfigV1(await readJsonFile<BotConfigV1>(fallbackPath));
+    let fallback = defaultBotConfigV1;
+    try {
+      fallback = validateBotConfigV1(await readJsonFile<BotConfigV1>(fallbackPath));
+    } catch {
+      logRateLimited("warn", "config.fallback.missing", "Fallback bot-config missing/invalid → using built-in defaults", 60_000);
+    }
 
     let seed = fallback;
     try {

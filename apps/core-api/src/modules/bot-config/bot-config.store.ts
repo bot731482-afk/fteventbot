@@ -42,7 +42,7 @@ export class BotConfigStore {
       const files = await readdir(historyDir);
       return files
         .filter((f) => f.endsWith(".json"))
-        .map((f) => ({ id: f.replace(/\\.json$/, ""), createdAt: f.replace(/\\.json$/, "") }))
+        .map((f) => ({ id: f.replace(/\.json$/, ""), createdAt: f.replace(/\.json$/, "") }))
         .sort((a, b) => (a.id < b.id ? 1 : -1));
     } catch {
       return [];

@@ -9,5 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
   }
 }

@@ -10,6 +10,9 @@ const runtimeLogsDir = path.join(logsDir, "runtime");
 
 const coreApiUrl = process.env.CORE_API_URL || "http://127.0.0.1:3000/v1";
 const adminUrl = process.env.ADMIN_WEB_URL || "http://127.0.0.1:3100";
+const coreApiHealthUrl = process.env.CORE_API_HEALTH_URL || `${coreApiUrl.replace(/\/$/, "")}/bot/config`;
+const adminHealthUrl = process.env.ADMIN_WEB_HEALTH_URL || adminUrl;
+const startupTimeoutMs = Number(process.env.STACK_STARTUP_TIMEOUT_MS || "120000");
 
 /** @type {Array<{name: string, child: import("node:child_process").ChildProcess}>} */
 const children = [];
@@ -129,10 +132,10 @@ async function main() {
   ensureLogsDir();
   console.log("[stack] starting core-api -> admin-web -> bot-service");
   startService("core-api", "pnpm", ["--filter", "@eon/core-api", "start"]);
-  await waitForHttp("core-api", `${coreApiUrl.replace(/\/$/, "")}/bot/config`, 120000);
+  await waitForHttp("core-api", coreApiHealthUrl, startupTimeoutMs);
 
   startService("admin-web", "pnpm", ["--filter", "@eon/admin-web", "start"]);
-  await waitForHttp("admin-web", adminUrl, 120000);
+  await waitForHttp("admin-web", adminHealthUrl, startupTimeoutMs);
 
   startService("bot-service", "pnpm", ["--filter", "@eon/bot-service", "start"]);
   console.log("[stack] all services started");

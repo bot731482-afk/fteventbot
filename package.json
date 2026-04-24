@@ -13,6 +13,8 @@
     "start:core-api": "pnpm --filter @eon/core-api start",
     "start:web": "pnpm --filter @eon/admin-web start",
     "start:bot": "pnpm --filter @eon/bot-service start",
+    "start:scheduler": "pnpm --filter @eon/scheduler-worker start",
+    "start:billing": "pnpm --filter @eon/billing-worker start",
     "start:stack": "node ./scripts/start-stack.js",
     "logs:stack": "node -e \"const fs=require('node:fs');const p='logs/runtime';if(!fs.existsSync(p)){console.log('no logs yet');process.exit(0)};for(const f of fs.readdirSync(p)){console.log('--- '+f+' ---');console.log(fs.readFileSync(require('node:path').join(p,f),'utf8').split('\\n').slice(-40).join('\\n'));}\"",
     "db:generate": "pnpm --filter @eon/core-api prisma:generate",

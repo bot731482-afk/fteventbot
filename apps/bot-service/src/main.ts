@@ -222,6 +222,19 @@ async function persistOffsetState(): Promise<void> {
   await rename(tmpPath, offsetStatePath);
 }
 
+async function safePersistOffsetState(context: string): Promise<void> {
+  try {
+    await persistOffsetState();
+  } catch (error) {
+    logRateLimited(
+      "warn",
+      "polling.offset.persist_failed",
+      `[polling] failed to persist offset (${context}): ${String(error)}`,
+      30_000
+    );
+  }
+}
+
 async function processUpdate(update: any): Promise<void> {
   const meta = getUpdateMeta(update);
   const updateId = meta.updateId;
@@ -235,7 +248,7 @@ async function processUpdate(update: any): Promise<void> {
   if (processedUpdateIds.has(updateId)) {
     if (offset < nextOffset) {
       offset = nextOffset;
-      await persistOffsetState().catch(() => undefined);
+      await safePersistOffsetState("duplicate_update");
     }
     console.log("[polling] duplicate update skipped", { ...meta, offset });
     return;
@@ -253,7 +266,7 @@ async function processUpdate(update: any): Promise<void> {
     // Ack update deterministically after processing attempt.
     if (offset < nextOffset) {
       offset = nextOffset;
-      await persistOffsetState().catch(() => undefined);
+      await safePersistOffsetState("ack_update");
     }
     rememberProcessedUpdate(updateId);
     console.log("[polling] update ack", { updateId, ok, offset });

@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "node -r dotenv/config dist/main.js dotenv_config_path=../../.env",
+    "dev": "tsx -r dotenv/config src/main.ts dotenv_config_path=../../.env",
+    "start": "node -r dotenv/config dist/main.js dotenv_config_path=../../.env",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
@@ -13,5 +14,8 @@
     "axios": "^1.7.7",
     "dotenv": "^16.4.5",
     "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   }
 }

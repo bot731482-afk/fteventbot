@@ -30,6 +30,23 @@
   - `billing`
   - `broadcast`
 
+## Runtime dependency model
+
+- `bot-service` is BOT-first and degrades gracefully:
+  - required: Telegram API, local bot config fallback
+  - optional enhancement: `core-api /v1/bot/config` and `/v1/bot/events/nearest`
+- `admin-web` depends on `core-api` and is the operational source-of-truth for `BotConfigV1`.
+- `core-api` depends on PostgreSQL/Prisma and optional Redis lock/cache.
+- `scheduler-worker` and `billing-worker` are optional background services and must not block bot startup.
+
+## Startup order
+
+- Recommended order for full stack:
+  1. `core-api`
+  2. `admin-web`
+  3. `bot-service`
+- `scripts/start-stack.js` enforces this sequence with readiness checks and fail-fast shutdown behavior.
+
 ## Billing and lifetime unlimited
 
 - Product matrix:

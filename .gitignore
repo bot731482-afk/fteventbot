@@ -7,3 +7,6 @@ dist
 coverage
 *.log
 apps/bot-service/bot-config.cache.json
+*.tsbuildinfo
+logs/
+apps/bot-service/bot-polling.offset.json

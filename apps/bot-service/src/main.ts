@@ -1,57 +1,6 @@
 import axios from "axios";
 import { Markup, Telegraf } from "telegraf";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { SocksProxyAgent } from "socks-proxy-agent";
-
-function toProxyUrl(raw: string): string {
-  const value = raw.trim();
-  if (!value) return "";
-  if (
-    value.startsWith("http://") ||
-    value.startsWith("https://") ||
-    value.startsWith("socks5://") ||
-    value.startsWith("socks4://")
-  ) {
-    return value;
-  }
-  // host:port:user:pass
-  const parts = value.split(":");
-  if (parts.length < 2) return value;
-  const host = parts[0];
-  const port = parts[1];
-  const user = parts[2];
-  const pass = parts.slice(3).join(":");
-  const proxyType = (process.env.TELEGRAM_PROXY_TYPE ?? "http").trim().toLowerCase();
-  const protocol = proxyType.startsWith("socks") ? "socks5" : "http";
-  if (user && pass) {
-    return `${protocol}://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}`;
-  }
-  return `${protocol}://${host}:${port}`;
-}
-
-const proxyUrl = toProxyUrl(process.env.TELEGRAM_PROXY_URL ?? "");
-const telegramAgent = (() => {
-  if (!proxyUrl) return undefined;
-  if (proxyUrl.startsWith("socks5://") || proxyUrl.startsWith("socks4://")) {
-    return new SocksProxyAgent(proxyUrl);
-  }
-  return new HttpsProxyAgent(proxyUrl);
-})();
-
-const bot = new Telegraf(
-  process.env.TELEGRAM_BOT_TOKEN ?? "",
-  telegramAgent ? { telegram: { agent: telegramAgent as any } } : undefined
-);
-
-const proxyInfo = (() => {
-  if (!proxyUrl) return "none";
-  try {
-    const url = new URL(proxyUrl);
-    return `${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
-  } catch {
-    return "custom";
-  }
-})();
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const apiBaseUrl = process.env.CORE_API_URL ?? "http://localhost:3000/v1";
 const cooldownSeconds = Math.max(0, Number(process.env.BOT_COOLDOWN_SECONDS ?? "10") || 10);
 const paymentsMode = (process.env.PAYMENTS_MODE ?? "free").trim().toLowerCase();
@@ -61,7 +10,7 @@ const coreApiRateLimitPerMinute = 100;
 const coreApiMinIntervalMs = Math.ceil(60000 / coreApiRateLimitPerMinute);
 let nextCoreApiRequestAt = 0;
 
-console.log(`bot config: enabled=${botEnabled} cooldown=${cooldownSeconds}s paymentsMode=${paymentsMode} telegramProxy=${proxyInfo}`);
+console.log(`bot config: enabled=${botEnabled} cooldown=${cooldownSeconds}s paymentsMode=${paymentsMode}`);
 
 const lastRequestAtByUser = new Map<number, number>();
 function enforceCooldown(telegramId: number): { ok: true } | { ok: false; waitSec: number } {
@@ -122,9 +71,27 @@ function getText(content: Record<string, string>, key: string, fallback: string)
   return content[key]?.trim() || fallback;
 }
 
-bot.start((ctx) => {
-  console.log("start command received");
-  ctx.reply("бот работает");
+bot.start(async (ctx) => {
+  const config = await fetchBotConfig();
+  const telegramId = ctx.from.id;
+  const subscribed = await hasRequiredSubscription(telegramId, config);
+  if (!subscribed && (config.flags["enforce.required.channels"] ?? true)) {
+    const firstLink = config.channels.find((item) => item.inviteLink)?.inviteLink ?? "https://t.me";
+    await ctx.reply(
+      getText(config.content, "subscription.required.prompt", "Подпишитесь на обязательные каналы для использования бота"),
+      Markup.inlineKeyboard([
+        [Markup.button.url(getText(config.content, "subscription.required.button", "Подписаться"), firstLink)],
+        [Markup.button.callback(getText(config.content, "subscription.check.button", "Проверить подписку"), "check_sub")]
+      ])
+    );
+    return;
+  }
+
+  const buttons = config.menuButtons.length ? config.menuButtons : ["Ближайшие ивенты", "Уведомить меня", "Профиль", "Купить доступ"];
+  await ctx.reply(
+    getText(config.content, "menu.title", "Главное меню"),
+    Markup.keyboard(buttons.map((item) => [item])).resize()
+  );
 });
 
 bot.action("check_sub", async (ctx) => {
@@ -167,6 +134,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let offset = 0;
+async function startManualPolling(): Promise<void> {
+  console.log("manual polling started");
+  while (true) {
+    try {
+      const updates = await bot.telegram.getUpdates({
+        offset,
+        timeout: 30,
+        allowed_updates: ["message", "callback_query"]
+      });
+      for (const update of updates) {
+        offset = update.update_id + 1;
+        await bot.handleUpdate(update);
+      }
+    } catch (error) {
+      console.error("polling error", error);
+      await sleep(3000);
+    }
+  }
+}
+
 async function launchWithRetry(): Promise<void> {
   if (!botEnabled) {
     console.log("bot disabled via BOT_ENABLED=false");
@@ -177,18 +165,9 @@ async function launchWithRetry(): Promise<void> {
       console.log("before getMe");
       const me = await bot.telegram.getMe();
       console.log("getMe success:", me.username);
-      console.log("before getUpdates");
-      const updates = await bot.telegram.callApi("getUpdates", {
-        timeout: 1,
-        allowed_updates: ["message", "callback_query"],
-      });
-      console.log("getUpdates success:", updates);
-      console.log("before launch");
-      await bot.launch({
-        dropPendingUpdates: true,
-        allowedUpdates: ["message", "callback_query"],
-      });
-      console.log("bot launched");
+      await bot.telegram.deleteWebhook();
+      console.log("before manual polling");
+      await startManualPolling();
       return;
     } catch (error) {
       if (isConflict409(error)) {

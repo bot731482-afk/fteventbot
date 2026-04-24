@@ -6,8 +6,10 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
   app.enableCors();
   app.setGlobalPrefix("v1");
-  const prismaService = app.get(PrismaService);
-  await prismaService.enableShutdownHooks(app);
+  if ((process.env.PRISMA_ENABLED ?? "true").trim().toLowerCase() !== "false") {
+    const prismaService = app.get(PrismaService);
+    await prismaService.enableShutdownHooks(app);
+  }
   await app.listen(3000);
 }
 

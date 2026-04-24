@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BotConfigV1Schema, type BotConfigV1 } from "@eon/shared-domain";
 
 type Plan = {
   code: string;
@@ -22,7 +23,8 @@ type Channel = {
 type ContentItem = { key: string; locale: string; text: string };
 type Flag = { key: string; enabled: boolean; description: string | null };
 
-type TabKey = "plans" | "channels" | "content" | "flags";
+type BotConfigHistoryEntry = { id: string; createdAt: string };
+type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config";
 
 export default function HomePage() {
   const [apiBaseUrl, setApiBaseUrl] = useState("http://localhost:3000/v1");
@@ -32,6 +34,9 @@ export default function HomePage() {
   const [contentItems, setContentItems] = useState<ContentItem[]>([]);
   const [flags, setFlags] = useState<Flag[]>([]);
   const [tab, setTab] = useState<TabKey>("plans");
+  const [botConfig, setBotConfig] = useState<BotConfigV1 | null>(null);
+  const [botConfigHistory, setBotConfigHistory] = useState<BotConfigHistoryEntry[]>([]);
+  const [botConfigDraft, setBotConfigDraft] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
@@ -108,6 +113,57 @@ export default function HomePage() {
       setFlags(flagRes.items);
       setLastLoadedAt(Date.now());
       pushToast("Обновлено");
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadBotConfig(): Promise<void> {
+    try {
+      setLoading(true);
+      setErrorText(null);
+      const res = await request<{ config: BotConfigV1; history: BotConfigHistoryEntry[] }>("/admin/bot-config");
+      setBotConfig(res.config);
+      setBotConfigHistory(res.history);
+      setBotConfigDraft(JSON.stringify(res.config, null, 2));
+      setLastLoadedAt(Date.now());
+      pushToast("Bot config загружен");
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveBotConfig(): Promise<void> {
+    try {
+      setLoading(true);
+      setErrorText(null);
+      const parsedJson = JSON.parse(botConfigDraft || "{}");
+      const parsed = BotConfigV1Schema.safeParse(parsedJson);
+      if (!parsed.success) {
+        const msg = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
+        throw new Error(msg);
+      }
+      await request("/admin/bot-config", { method: "PATCH", body: JSON.stringify(parsed.data) });
+      pushToast("Bot config сохранён");
+      await loadBotConfig();
+    } catch (error) {
+      setErrorText(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function rollbackBotConfig(id: string): Promise<void> {
+    try {
+      setLoading(true);
+      setErrorText(null);
+      await request("/admin/bot-config/rollback", { method: "POST", body: JSON.stringify({ id }) });
+      pushToast("Rollback выполнен");
+      await loadBotConfig();
     } catch (error) {
       setErrorText(String(error));
     } finally {
@@ -218,6 +274,15 @@ export default function HomePage() {
               </button>
               <button className={`tab ${tab === "flags" ? "tabActive" : ""}`} onClick={() => setTab("flags")}>
                 Feature flags <span className="muted">({flags.length})</span>
+              </button>
+              <button
+                className={`tab ${tab === "bot_config" ? "tabActive" : ""}`}
+                onClick={() => {
+                  setTab("bot_config");
+                  if (isConfigured) void loadBotConfig();
+                }}
+              >
+                Bot config
               </button>
             </div>
           </div>
@@ -477,6 +542,61 @@ export default function HomePage() {
                 </tbody>
               </table>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "bot_config" ? (
+        <div className="card">
+          <div className="cardBody stack">
+            <div className="rowBetween">
+              <div className="stack" style={{ gap: 4 }}>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>BotConfigV1</div>
+                <div className="hint">
+                  Единая схема для <code>bot-service</code>, <code>core-api</code>, <code>admin-web</code>. Изменения применяются ботом
+                  автоматически (sync).
+                </div>
+              </div>
+              <div className="row">
+                <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void loadBotConfig()}>
+                  Обновить
+                </button>
+                <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void saveBotConfig()}>
+                  Сохранить
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              className="field textarea"
+              value={botConfigDraft}
+              onChange={(e) => setBotConfigDraft(e.target.value)}
+              placeholder="{ ... BotConfigV1 ... }"
+              style={{ minHeight: 320 }}
+            />
+
+            <details>
+              <summary className="hint">Preview (parsed)</summary>
+              <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{botConfig ? JSON.stringify(botConfig, null, 2) : "not loaded"}</pre>
+            </details>
+
+            <div className="stack" style={{ gap: 8 }}>
+              <div style={{ fontWeight: 600 }}>History / rollback</div>
+              {botConfigHistory.length === 0 ? (
+                <div className="hint">История пока пустая (появится после первого сохранения).</div>
+              ) : (
+                <div className="stack" style={{ gap: 6 }}>
+                  {botConfigHistory.slice(0, 10).map((h) => (
+                    <div key={h.id} className="rowBetween">
+                      <code>{h.id}</code>
+                      <button className="btn btnDanger btnSmall" disabled={!isConfigured || loading} onClick={() => void rollbackBotConfig(h.id)}>
+                        Rollback
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       ) : null}

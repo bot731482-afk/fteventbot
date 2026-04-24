@@ -3,7 +3,7 @@ import { Markup, Telegraf } from "telegraf";
 import { ConfigManager } from "./config";
 import { logRateLimited } from "./logger";
 import { startScheduler } from "./scheduler";
-import type { BotConfigV1 } from "./types";
+import type { BotConfigV1 } from "@eon/shared-domain";
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const coreApiBaseUrl = (process.env.CORE_API_URL ?? "").trim();
 const paymentsMode = (process.env.PAYMENTS_MODE ?? "free").trim().toLowerCase();
@@ -53,7 +53,7 @@ async function coreApiGet<T>(path: string): Promise<T> {
 }
 
 async function hasRequiredSubscription(telegramId: number, config: BotConfigV1): Promise<boolean> {
-  const required = config.channels.filter((item) => item.isActive && item.isRequired);
+  const required = config.channels.filter((item: BotConfigV1["channels"][number]) => item.isActive && item.isRequired);
   if (required.length === 0) return true;
   for (const channel of required) {
     try {
@@ -90,7 +90,7 @@ bot.start(async (ctx) => {
     const buttons = config.menuButtons.main.length ? config.menuButtons.main : ["Профиль", "События", "Поддержка"];
     await ctx.reply(
       config.content.startMessage,
-      Markup.keyboard(buttons.map((item) => [item])).resize()
+      Markup.keyboard(buttons.map((item: string) => [item])).resize()
     );
   } catch (error) {
     console.error("start handler error", error);
@@ -118,7 +118,7 @@ bot.hears(/События|Открыть события|Ближайшие ив�
   }
   try {
     const response = await coreApiGet<{ items: Array<{ displayLabel: string }> }>("/bot/events/nearest");
-    const lines = response.items.map((item) => item.displayLabel);
+    const lines = response.items.map((item: { displayLabel: string }) => item.displayLabel);
     await ctx.reply(lines.join("\n") || "Нет данных по ивентам");
   } catch (error) {
     logRateLimited("warn", "events.api.unavailable", "API unavailable → using local fallback response for events", 60_000);

@@ -2,6 +2,8 @@ node_modules
 dist
 .env
 .pnpm-store
-.next coverage 
+.next
+**/.next
+coverage
 *.log
 apps/bot-service/bot-config.cache.json

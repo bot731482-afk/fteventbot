@@ -1,8 +1,9 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BotConfigV1 } from "./types";
+import type { BotConfigV1 } from "@eon/shared-domain";
 import { logRateLimited } from "./logger";
-import { mapRemoteToBotConfigV1, tryFetchRemoteConfig } from "./remoteConfig";
+import { tryFetchRemoteConfig } from "./remoteConfig";
+import { validateBotConfigV1 } from "@eon/shared-domain";
 
 function resolveInServiceDir(filename: string): string {
   // When run via pnpm --filter, cwd is typically apps/bot-service
@@ -46,11 +47,11 @@ export class ConfigManager {
   }
 
   static async create(options: ConfigManagerOptions): Promise<ConfigManager> {
-    const fallback = await readJsonFile<BotConfigV1>(fallbackPath);
+    const fallback = validateBotConfigV1(await readJsonFile<BotConfigV1>(fallbackPath));
 
     let seed = fallback;
     try {
-      const cached = await readJsonFile<BotConfigV1>(cachePath);
+      const cached = validateBotConfigV1(await readJsonFile<BotConfigV1>(cachePath));
       seed = cached;
     } catch {
       logRateLimited("info", "config.cache.missing", "No cached config found → using local fallback config", 60_000);
@@ -74,10 +75,9 @@ export class ConfigManager {
     const remote = await tryFetchRemoteConfig(this.coreApiBaseUrl);
     if (!remote) return;
 
-    const mapped = mapRemoteToBotConfigV1(remote, fallback);
-    this.current = mapped;
+    this.current = remote;
     try {
-      await writeJsonFileAtomic(cachePath, mapped);
+      await writeJsonFileAtomic(cachePath, remote);
       logRateLimited("info", "config.sync.ok", "Remote config synced → cache updated", 60_000);
     } catch (error) {
       logRateLimited("warn", "config.cache.write_failed", `Failed to write config cache (${String(error)})`, 60_000);

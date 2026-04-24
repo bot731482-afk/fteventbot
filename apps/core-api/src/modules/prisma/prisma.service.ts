@@ -40,6 +40,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    if ((process.env.PRISMA_ENABLED ?? "true").trim().toLowerCase() === "false") {
+      return;
+    }
     await this.safeConnect();
   }
 

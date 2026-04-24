@@ -34,3 +34,6 @@ export interface UserNotificationRule {
   notifyBeforeMinutes: 1 | 3 | 5;
   isActive: boolean;
 }
+
+export { BotConfigV1Schema, defaultBotConfigV1, validateBotConfigV1 } from "./botConfig";
+export type { BotConfigV1 } from "./botConfig";

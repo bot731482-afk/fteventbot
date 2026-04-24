@@ -72,26 +72,31 @@ function getText(content: Record<string, string>, key: string, fallback: string)
 }
 
 bot.start(async (ctx) => {
-  const config = await fetchBotConfig();
-  const telegramId = ctx.from.id;
-  const subscribed = await hasRequiredSubscription(telegramId, config);
-  if (!subscribed && (config.flags["enforce.required.channels"] ?? true)) {
-    const firstLink = config.channels.find((item) => item.inviteLink)?.inviteLink ?? "https://t.me";
-    await ctx.reply(
-      getText(config.content, "subscription.required.prompt", "Подпишитесь на обязательные каналы для использования бота"),
-      Markup.inlineKeyboard([
-        [Markup.button.url(getText(config.content, "subscription.required.button", "Подписаться"), firstLink)],
-        [Markup.button.callback(getText(config.content, "subscription.check.button", "Проверить подписку"), "check_sub")]
-      ])
-    );
-    return;
-  }
+  try {
+    const config = await fetchBotConfig();
+    const telegramId = ctx.from.id;
+    const subscribed = await hasRequiredSubscription(telegramId, config);
+    if (!subscribed && (config.flags["enforce.required.channels"] ?? true)) {
+      const firstLink = config.channels.find((item) => item.inviteLink)?.inviteLink ?? "https://t.me";
+      await ctx.reply(
+        getText(config.content, "subscription.required.prompt", "Подпишитесь на обязательные каналы для использования бота"),
+        Markup.inlineKeyboard([
+          [Markup.button.url(getText(config.content, "subscription.required.button", "Подписаться"), firstLink)],
+          [Markup.button.callback(getText(config.content, "subscription.check.button", "Проверить подписку"), "check_sub")]
+        ])
+      );
+      return;
+    }
 
-  const buttons = config.menuButtons.length ? config.menuButtons : ["Ближайшие ивенты", "Уведомить меня", "Профиль", "Купить доступ"];
-  await ctx.reply(
-    getText(config.content, "menu.title", "Главное меню"),
-    Markup.keyboard(buttons.map((item) => [item])).resize()
-  );
+    const buttons = config.menuButtons.length ? config.menuButtons : ["Ближайшие ивенты", "Уведомить меня", "Профиль", "Купить доступ"];
+    await ctx.reply(
+      getText(config.content, "menu.title", "Главное меню"),
+      Markup.keyboard(buttons.map((item) => [item])).resize()
+    );
+  } catch (error) {
+    console.error("start handler error", error);
+    await ctx.reply("Временная ошибка. Попробуйте позже.");
+  }
 });
 
 bot.action("check_sub", async (ctx) => {
@@ -106,9 +111,14 @@ bot.hears(/Ближайшие ивенты/i, async (ctx) => {
     await ctx.reply(`Подожди ${cooldown.waitSec} сек. (кд ${cooldownSeconds} сек)`);
     return;
   }
-  const response = await coreApiGet<{ items: Array<{ displayLabel: string }> }>("/bot/events/nearest");
-  const lines = response.items.map((item) => item.displayLabel);
-  await ctx.reply(lines.join("\n") || "Нет данных по ивентам");
+  try {
+    const response = await coreApiGet<{ items: Array<{ displayLabel: string }> }>("/bot/events/nearest");
+    const lines = response.items.map((item) => item.displayLabel);
+    await ctx.reply(lines.join("\n") || "Нет данных по ивентам");
+  } catch (error) {
+    console.error("nearest events error", error);
+    await ctx.reply("Временная ошибка. Попробуйте позже.");
+  }
 });
 
 bot.hears(/Купить доступ/i, async (ctx) => {
@@ -139,13 +149,14 @@ async function startManualPolling(): Promise<void> {
   console.log("manual polling started");
   while (true) {
     try {
-      const updates = await bot.telegram.getUpdates({
+      const updates = await (bot.telegram as any).getUpdates({
         offset,
         timeout: 30,
         allowed_updates: ["message", "callback_query"]
       });
       for (const update of updates) {
         offset = update.update_id + 1;
+        console.log("update received:", update.update_id);
         await (bot as any).handleUpdate(update);
       }
     } catch (error) {
@@ -165,7 +176,11 @@ async function launchWithRetry(): Promise<void> {
       console.log("before getMe");
       const me = await bot.telegram.getMe();
       console.log("getMe success:", me.username);
-      await bot.telegram.deleteWebhook();
+      try {
+        await bot.telegram.deleteWebhook();
+      } catch (error) {
+        console.warn("deleteWebhook failed", error);
+      }
       console.log("before manual polling");
       await startManualPolling();
       return;

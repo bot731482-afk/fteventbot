@@ -20,13 +20,20 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
 
 export type BotConfigHistoryEntry = { id: string; createdAt: string };
 
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
 export class BotConfigStore {
   async readCurrent(): Promise<BotConfigV1> {
     try {
       const raw = await readFile(storePath, "utf8");
       return validateBotConfigV1(JSON.parse(raw));
-    } catch {
-      return defaultBotConfigV1;
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return defaultBotConfigV1;
+      }
+      throw new Error(`Failed to read bot config store (${String(error)})`);
     }
   }
 
@@ -58,8 +65,19 @@ export class BotConfigStore {
 
   async rollbackTo(id: string): Promise<{ ok: true }> {
     const safeId = id.replace(/[^0-9A-Za-z-]/g, "");
+    if (!safeId) {
+      throw new Error("Invalid rollback id");
+    }
     const historyPath = path.join(historyDir, `${safeId}.json`);
-    const raw = await readFile(historyPath, "utf8");
+    let raw: string;
+    try {
+      raw = await readFile(historyPath, "utf8");
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        throw new Error(`Rollback snapshot not found: ${safeId}`);
+      }
+      throw error;
+    }
     const cfg = validateBotConfigV1(JSON.parse(raw));
     await writeJsonAtomic(storePath, cfg);
     return { ok: true };

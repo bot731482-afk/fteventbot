@@ -57,6 +57,9 @@ const cooldownSeconds = Math.max(0, Number(process.env.BOT_COOLDOWN_SECONDS ?? "
 const paymentsMode = (process.env.PAYMENTS_MODE ?? "free").trim().toLowerCase();
 const botEnabled = (process.env.BOT_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const launchRetryMs = Math.max(1000, Number(process.env.BOT_LAUNCH_RETRY_MS ?? "30000") || 30000);
+const coreApiRateLimitPerMinute = 100;
+const coreApiMinIntervalMs = Math.ceil(60000 / coreApiRateLimitPerMinute);
+let nextCoreApiRequestAt = 0;
 
 console.log(`bot config: enabled=${botEnabled} cooldown=${cooldownSeconds}s paymentsMode=${paymentsMode} telegramProxy=${proxyInfo}`);
 
@@ -80,9 +83,23 @@ interface BotConfig {
   flags: Record<string, boolean>;
 }
 
-async function fetchBotConfig(): Promise<BotConfig> {
-  const response = await axios.get<BotConfig>(`${apiBaseUrl}/bot/config`);
+async function throttleCoreApi(): Promise<void> {
+  const now = Date.now();
+  const waitMs = Math.max(0, nextCoreApiRequestAt - now);
+  nextCoreApiRequestAt = Math.max(now, nextCoreApiRequestAt) + coreApiMinIntervalMs;
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+}
+
+async function coreApiGet<T>(path: string): Promise<T> {
+  await throttleCoreApi();
+  const response = await axios.get<T>(`${apiBaseUrl}${path}`);
   return response.data;
+}
+
+async function fetchBotConfig(): Promise<BotConfig> {
+  return coreApiGet<BotConfig>("/bot/config");
 }
 
 async function hasRequiredSubscription(telegramId: number, config: BotConfig): Promise<boolean> {
@@ -140,8 +157,8 @@ bot.hears(/Ближайшие ивенты/i, async (ctx) => {
     await ctx.reply(`Подожди ${cooldown.waitSec} сек. (кд ${cooldownSeconds} сек)`);
     return;
   }
-  const response = await axios.get<{ items: Array<{ displayLabel: string }> }>(`${apiBaseUrl}/bot/events/nearest`);
-  const lines = response.data.items.map((item) => item.displayLabel);
+  const response = await coreApiGet<{ items: Array<{ displayLabel: string }> }>("/bot/events/nearest");
+  const lines = response.items.map((item) => item.displayLabel);
   await ctx.reply(lines.join("\n") || "Нет данных по ивентам");
 });
 
@@ -164,16 +181,6 @@ function isConflict409(error: unknown): boolean {
   return maybeResponse?.error_code === 409;
 }
 
-async function prepareTelegramPolling(): Promise<void> {
-  try {
-    console.log("before deleteWebhook");
-    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    console.log("after deleteWebhook");
-  } catch (error) {
-    console.warn("failed to delete webhook before launch", error);
-  }
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -185,9 +192,8 @@ async function launchWithRetry(): Promise<void> {
   }
   for (;;) {
     try {
-      await prepareTelegramPolling();
       console.log("before launch");
-      await bot.launch({ dropPendingUpdates: true });
+      await bot.launch();
       console.log("after launch");
       console.log("bot launched");
       return;

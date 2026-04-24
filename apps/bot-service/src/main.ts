@@ -177,13 +177,17 @@ async function launchWithRetry(): Promise<void> {
       console.log("before getMe");
       const me = await bot.telegram.getMe();
       console.log("getMe success:", me.username);
-      console.log("before launch");
-      await bot.telegram.deleteWebhook({
-        drop_pending_updates: true,
+      console.log("before getUpdates");
+      const updates = await bot.telegram.callApi("getUpdates", {
+        timeout: 1,
+        allowed_updates: ["message", "callback_query"],
       });
-      console.log("starting polling manually");
-      bot.startPolling();
-      console.log("polling started");
+      console.log("getUpdates success:", updates);
+      console.log("before launch");
+      await bot.launch({
+        dropPendingUpdates: true,
+        allowedUpdates: ["message", "callback_query"],
+      });
       console.log("bot launched");
       return;
     } catch (error) {

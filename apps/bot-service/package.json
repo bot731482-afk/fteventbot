@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "node -r dotenv/config dist/main.js dotenv_config_path=../../.env",
+    "dev": "tsx -r dotenv/config src/main.ts dotenv_config_path=../../.env",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
@@ -13,8 +13,6 @@
     "@eon/shared-config": "workspace:*",
     "axios": "^1.7.7",
     "dotenv": "^16.4.5",
-    "https-proxy-agent": "^5.0.1",
-    "socks-proxy-agent": "^6.2.1",
     "telegraf": "^4.16.3"
   }
 }

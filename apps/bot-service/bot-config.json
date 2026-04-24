@@ -1,0 +1,30 @@
+{
+  "content": {
+    "startMessage": "Добро пожаловать в Event Helper",
+    "subscriptionRequiredMessage": "Для использования бота подпишитесь на обязательные каналы",
+    "eventsUnavailableMessage": "Сервис ивентов временно недоступен, попробуйте позже",
+    "supportMessage": "По всем вопросам: @support"
+  },
+  "menuButtons": {
+    "main": ["Профиль", "События", "Поддержка"],
+    "afterSubscription": ["Открыть события", "Профиль"]
+  },
+  "channels": [
+    {
+      "title": "Основной канал",
+      "username": "@main_channel",
+      "inviteLink": "https://t.me/main_channel",
+      "isRequired": true,
+      "isActive": true
+    }
+  ],
+  "flags": {
+    "subscriptionsCheckEnabled": true,
+    "eventsEnabled": true,
+    "notificationsEnabled": true,
+    "paymentsEnabled": false
+  },
+  "limits": {
+    "cooldownSeconds": 10
+  }
+}

@@ -4,3 +4,4 @@ dist
 .pnpm-store
 .next coverage 
 *.log
+apps/bot-service/bot-config.cache.json

@@ -8,7 +8,7 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix("v1");
   const portCandidate = Number(process.env.CORE_API_PORT ?? process.env.PORT ?? "3000");
   const port = Number.isInteger(portCandidate) && portCandidate > 0 && portCandidate <= 65535 ? portCandidate : 3000;
-  const host = (process.env.CORE_API_HOST ?? "0.0.0.0").trim();
+  const host = (process.env.CORE_API_HOST ?? "127.0.0.1").trim();
   if ((process.env.PRISMA_ENABLED ?? "true").trim().toLowerCase() !== "false") {
     const prismaService = app.get(PrismaService);
     await prismaService.enableShutdownHooks(app);

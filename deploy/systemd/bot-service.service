@@ -1,4 +1,23 @@
 [Unit]
+Description=Eon Bot Service (polling)
+After=network.target core-api.service
+Wants=core-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fteventbot
+EnvironmentFile=/opt/fteventbot/.env
+ExecStart=/usr/bin/pnpm --filter @eon/bot-service start
+Restart=always
+RestartSec=3
+
+# Internal API (optional enhancement)
+Environment=CORE_API_URL=http://127.0.0.1:3000/v1
+
+[Install]
+WantedBy=multi-user.target
+
+[Unit]
 Description=fteventbot bot-service
 After=network.target core-api.service
 Wants=core-api.service

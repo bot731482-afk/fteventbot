@@ -1,4 +1,23 @@
 [Unit]
+Description=Eon Core API (localhost only)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fteventbot
+EnvironmentFile=/opt/fteventbot/.env
+ExecStart=/usr/bin/pnpm --filter @eon/core-api start
+Restart=always
+RestartSec=3
+
+# core-api must bind localhost only
+Environment=CORE_API_HOST=127.0.0.1
+Environment=CORE_API_PORT=3000
+
+[Install]
+WantedBy=multi-user.target
+
+[Unit]
 Description=fteventbot core-api
 After=network.target
 

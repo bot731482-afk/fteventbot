@@ -29,7 +29,7 @@ type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config";
 export default function HomePage() {
   const proxyMode = (process.env.NEXT_PUBLIC_ADMIN_PROXY_MODE ?? "false").trim().toLowerCase() === "true";
   const [apiBaseUrl, setApiBaseUrl] = useState(proxyMode ? "/api/core" : process.env.NEXT_PUBLIC_CORE_API_URL ?? "http://localhost:3000/v1");
-  const [ownerId, setOwnerId] = useState(proxyMode ? "server" : "");
+  const [ownerId, setOwnerId] = useState(proxyMode ? "server-managed" : "");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [contentItems, setContentItems] = useState<ContentItem[]>([]);
@@ -246,7 +246,7 @@ export default function HomePage() {
   const isConfigured = proxyMode ? apiBaseUrl.trim().length > 0 : apiBaseUrl.trim().length > 0 && ownerId.trim().length > 0;
   const statusPill = (() => {
     if (loading) return { dot: "dotWarn", text: "Загрузка..." };
-    if (!isConfigured) return { dot: "dotBad", text: "Нужен OWNER_ADMIN_ID" };
+    if (!isConfigured) return { dot: "dotBad", text: proxyMode ? "Нужен server env" : "Нужен OWNER_ADMIN_ID" };
     if (errorText) return { dot: "dotBad", text: "Ошибка" };
     if (lastLoadedAt) return { dot: "dotOk", text: "Готово" };
     return { dot: "dotWarn", text: "Не загружено" };
@@ -268,8 +268,16 @@ export default function HomePage() {
             Доступ к админ-ручкам защищён заголовком <code>x-owner-admin-id</code>.
           </p>
           <div className="hint">
-            Если видишь <code>TypeError: Failed to fetch</code> — обычно это неправильный API URL, не запущен <code>core-api</code>,
-            или CORS/сеть. Если <code>403/401</code> — не тот OWNER_ADMIN_ID.
+            {proxyMode ? (
+              <>
+                Production proxy mode: запросы идут через <code>/api/core/*</code>. Owner id не вводится в UI (берётся из server env).
+              </>
+            ) : (
+              <>
+                Если видишь <code>TypeError: Failed to fetch</code> — обычно это неправильный API URL, не запущен <code>core-api</code>,
+                или CORS/сеть. Если <code>403/401</code> — не тот OWNER_ADMIN_ID.
+              </>
+            )}
           </div>
         </div>
         <div className="pill" title="Текущий статус">
@@ -324,7 +332,11 @@ export default function HomePage() {
           </div>
 
           {!isConfigured ? (
-            <div className="errorBox">Введи OWNER_ADMIN_ID (из .env `OWNER_ADMIN_ID`) и нажми “Обновить данные”.</div>
+            <div className="errorBox">
+              {proxyMode
+                ? "Proxy mode: на сервере должны быть заданы OWNER_ADMIN_ID и CORE_API_INTERNAL_URL."
+                : "Введи OWNER_ADMIN_ID (из .env `OWNER_ADMIN_ID`) и нажми “Обновить данные”."}
+            </div>
           ) : null}
           {errorText ? <div className="errorBox">{errorText}</div> : null}
           {toast ? (

@@ -73,6 +73,15 @@ See:
 
 See `deploy/nginx/admin-web.conf`.
 
+### E2E config sync verification (admin-web -> core-api)
+
+When `admin-web` runs in proxy mode, the browser talks only to admin-web, and admin-web proxies to core-api server-side.
+
+Examples (from the VPS):
+
+- **Public config** (proxied): `curl -u user:pass http://your-domain/api/core/bot/config`
+- **Admin view** (proxied): `curl -u user:pass http://your-domain/api/core/admin/bot-config`
+
 ## Bot-first Runtime Guarantees
 
 - `bot-service` starts with local fallback config and cached config.

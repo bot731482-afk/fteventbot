@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
 import { BotConfigV1Schema, type BotConfigV1 } from "@eon/shared-domain";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BotConfigPanel } from "./components/bot-config/BotConfigPanel";
+import { groupValidationIssues, normalizeDraftForSave, serializeBotConfigState } from "./components/bot-config/botConfigUtils";
 
 type Plan = {
   code: string;
@@ -12,19 +14,11 @@ type Plan = {
   enabled: boolean;
 };
 
-type Channel = {
-  id: string;
-  tgChannelId: string;
-  username: string | null;
-  inviteLink: string | null;
-  isActive: boolean;
-};
-
 type ContentItem = { key: string; locale: string; text: string };
 type Flag = { key: string; enabled: boolean; description: string | null };
 
 type BotConfigHistoryEntry = { id: string; createdAt: string };
-type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config" | "users";
+type TabKey = "plans" | "content" | "flags" | "bot_config" | "users";
 
 type UserListItem = {
   id: string;
@@ -48,22 +42,34 @@ type UserDetail = {
   recentDailyUsage: Array<{ dayUtc: string; count: number }>;
 };
 
+const LS_API = "eon.admin.apiBaseUrl";
+const LS_OWNER = "eon.admin.ownerId";
+
 export default function HomePage() {
   const proxyMode = (process.env.NEXT_PUBLIC_ADMIN_PROXY_MODE ?? "false").trim().toLowerCase() === "true";
   const [apiBaseUrl, setApiBaseUrl] = useState(proxyMode ? "/api/core" : process.env.NEXT_PUBLIC_CORE_API_URL ?? "http://localhost:3000/v1");
   const [ownerId, setOwnerId] = useState(proxyMode ? "server-managed" : "");
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [channels, setChannels] = useState<Channel[]>([]);
   const [contentItems, setContentItems] = useState<ContentItem[]>([]);
   const [flags, setFlags] = useState<Flag[]>([]);
   const [tab, setTab] = useState<TabKey>("plans");
   const [botConfig, setBotConfig] = useState<BotConfigV1 | null>(null);
   const [botConfigHistory, setBotConfigHistory] = useState<BotConfigHistoryEntry[]>([]);
+  /** Последний JSON с сервера (admin GET), для сброса черновика */
+  const [serverBotConfigJson, setServerBotConfigJson] = useState<string | null>(null);
+  const [publicBotConfig, setPublicBotConfig] = useState<BotConfigV1 | null>(null);
+  const [publicBotConfigError, setPublicBotConfigError] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState("");
   const [userItems, setUserItems] = useState<UserListItem[]>([]);
   const [userDetail, setUserDetail] = useState<UserDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+
+  const [listLoading, setListLoading] = useState(false);
+  const [botConfigLoading, setBotConfigLoading] = useState(false);
+  const [savingBotConfig, setSavingBotConfig] = useState(false);
+  const [loadingPublicConfig, setLoadingPublicConfig] = useState(false);
+
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [botConfigError, setBotConfigError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -79,37 +85,49 @@ export default function HomePage() {
   useEffect(() => {
     try {
       if (proxyMode) return;
-      const savedApi = localStorage.getItem("eon.admin.apiBaseUrl");
-      const savedOwner = localStorage.getItem("eon.admin.ownerId");
+      const savedApi = localStorage.getItem(LS_API);
+      const savedOwner = localStorage.getItem(LS_OWNER);
       if (savedApi) setApiBaseUrl(savedApi);
       if (savedOwner) setOwnerId(savedOwner);
     } catch {
       // ignore
     }
-  }, []);
+  }, [proxyMode]);
 
   useEffect(() => {
     try {
       if (proxyMode) return;
-      localStorage.setItem("eon.admin.apiBaseUrl", apiBaseUrl);
+      localStorage.setItem(LS_API, apiBaseUrl);
     } catch {
       // ignore
     }
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, proxyMode]);
 
   useEffect(() => {
     try {
       if (proxyMode) return;
-      localStorage.setItem("eon.admin.ownerId", ownerId);
+      localStorage.setItem(LS_OWNER, ownerId);
     } catch {
       // ignore
     }
-  }, [ownerId]);
+  }, [ownerId, proxyMode]);
 
   function pushToast(text: string): void {
     setToast(text);
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+    toastTimer.current = window.setTimeout(() => setToast(null), 3200);
+  }
+
+  function clearStoredConnection(): void {
+    try {
+      localStorage.removeItem(LS_API);
+      localStorage.removeItem(LS_OWNER);
+    } catch {
+      // ignore
+    }
+    setApiBaseUrl(process.env.NEXT_PUBLIC_CORE_API_URL ?? "http://localhost:3000/v1");
+    setOwnerId("");
+    pushToast("Сохранённые URL и OWNER очищены");
   }
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -125,81 +143,157 @@ export default function HomePage() {
     return (await response.json()) as T;
   }
 
-  async function loadAll(): Promise<void> {
+  const loadPublicBotConfig = useCallback(async (): Promise<void> => {
+    setLoadingPublicConfig(true);
+    setPublicBotConfigError(null);
     try {
-      setLoading(true);
-      setErrorText(null);
-      const [planRes, channelRes, contentRes, flagRes] = await Promise.all([
-        request<{ items: Plan[] }>("/admin/plans"),
-        request<{ items: Channel[] }>("/admin/channels"),
-        request<{ items: ContentItem[] }>("/admin/content"),
-        request<{ items: Flag[] }>("/admin/flags")
-      ]);
-      setPlans(planRes.items);
-      setChannels(channelRes.items);
-      setContentItems(contentRes.items);
-      setFlags(flagRes.items);
-      setLastLoadedAt(Date.now());
-      pushToast("Обновлено");
-    } catch (error) {
-      setErrorText(String(error));
+      const response = await fetch(`${apiBaseUrl}/bot/config`, {
+        method: "GET",
+        headers: { accept: "application/json" }
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(text?.trim() ? text : `${response.status} ${response.statusText}`);
+      }
+      const data = (await response.json()) as BotConfigV1;
+      setPublicBotConfig(data);
+    } catch (e) {
+      setPublicBotConfig(null);
+      setPublicBotConfigError(String(e));
     } finally {
-      setLoading(false);
+      setLoadingPublicConfig(false);
     }
-  }
+  }, [apiBaseUrl]);
 
-  async function loadBotConfig(): Promise<void> {
+  const loadBotConfig = useCallback(
+    async (opts?: { quiet?: boolean }): Promise<void> => {
+      try {
+        setBotConfigLoading(true);
+        setBotConfigError(null);
+        const res = await request<{ config: BotConfigV1; history: BotConfigHistoryEntry[] }>("/admin/bot-config");
+        setBotConfig(res.config);
+        setBotConfigHistory(res.history);
+        setServerBotConfigJson(JSON.stringify(res.config));
+        setLastLoadedAt(Date.now());
+        if (!opts?.quiet) pushToast("Настройки бота загружены с сервера");
+      } catch (error) {
+        setBotConfigError(String(error));
+      } finally {
+        setBotConfigLoading(false);
+      }
+    },
+    [apiBaseUrl, ownerId, proxyMode]
+  );
+
+  const validationLines = useMemo(() => {
+    if (!botConfig) return [];
+    const normalized = normalizeDraftForSave(botConfig);
+    const parsed = BotConfigV1Schema.safeParse(normalized);
+    if (parsed.success) return [];
+    return groupValidationIssues(parsed.error.issues);
+  }, [botConfig]);
+
+  const isBotConfigDirty = useMemo(() => {
+    if (!botConfig || !serverBotConfigJson) return false;
     try {
-      setLoading(true);
-      setErrorText(null);
-      const res = await request<{ config: BotConfigV1; history: BotConfigHistoryEntry[] }>("/admin/bot-config");
-      setBotConfig(res.config);
-      setBotConfigHistory(res.history);
-      setLastLoadedAt(Date.now());
-      pushToast("Bot config загружен");
-    } catch (error) {
-      setErrorText(String(error));
-    } finally {
-      setLoading(false);
+      const serverObj = JSON.parse(serverBotConfigJson) as BotConfigV1;
+      return serializeBotConfigState(botConfig) !== serializeBotConfigState(serverObj);
+    } catch {
+      return true;
     }
-  }
+  }, [botConfig, serverBotConfigJson]);
+
+  useEffect(() => {
+    if (!isBotConfigDirty) return;
+    const fn = (e: BeforeUnloadEvent): void => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", fn);
+    return () => window.removeEventListener("beforeunload", fn);
+  }, [isBotConfigDirty]);
 
   async function saveBotConfig(): Promise<void> {
+    if (!botConfig) return;
+    const normalized = normalizeDraftForSave(botConfig);
+    const parsed = BotConfigV1Schema.safeParse(normalized);
+    if (!parsed.success) {
+      setBotConfigError("Исправьте ошибки в форме (см. список выше).");
+      return;
+    }
     try {
-      setLoading(true);
+      setSavingBotConfig(true);
+      setBotConfigError(null);
       setErrorText(null);
-      const parsed = BotConfigV1Schema.safeParse(botConfig);
-      if (!parsed.success) {
-        const msg = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
-        throw new Error(msg);
-      }
       await request("/admin/bot-config", { method: "PATCH", body: JSON.stringify(parsed.data) });
-      pushToast("Bot config сохранён");
-      await loadBotConfig();
+      pushToast("Сохранено на сервере");
+      await loadBotConfig({ quiet: true });
+      await loadPublicBotConfig();
     } catch (error) {
-      setErrorText(String(error));
+      setBotConfigError(String(error));
     } finally {
-      setLoading(false);
+      setSavingBotConfig(false);
+    }
+  }
+
+  function discardBotConfigDraft(): void {
+    if (!serverBotConfigJson) return;
+    if (isBotConfigDirty) {
+      const ok = window.confirm("Сбросить все несохранённые изменения и вернуть последнюю версию с сервера?");
+      if (!ok) return;
+    }
+    try {
+      setBotConfig(JSON.parse(serverBotConfigJson) as BotConfigV1);
+      setBotConfigError(null);
+      pushToast("Черновик совпадает с последней загрузкой с сервера");
+    } catch {
+      setBotConfigError("Не удалось восстановить конфиг из снимка");
     }
   }
 
   async function rollbackBotConfig(id: string): Promise<void> {
+    const ok = window.confirm(
+      `Откатить конфиг бота к снимку ${id}? Текущие несохранённые правки в форме будут потеряны; после отката проверьте публичный конфиг.`
+    );
+    if (!ok) return;
     try {
-      setLoading(true);
-      setErrorText(null);
+      setSavingBotConfig(true);
+      setBotConfigError(null);
       await request("/admin/bot-config/rollback", { method: "POST", body: JSON.stringify({ id }) });
-      pushToast("Rollback выполнен");
-      await loadBotConfig();
+      pushToast("Откат выполнен");
+      await loadBotConfig({ quiet: true });
+      await loadPublicBotConfig();
+    } catch (error) {
+      setBotConfigError(String(error));
+    } finally {
+      setSavingBotConfig(false);
+    }
+  }
+
+  async function loadAll(): Promise<void> {
+    try {
+      setListLoading(true);
+      setErrorText(null);
+      const [planRes, contentRes, flagRes] = await Promise.all([
+        request<{ items: Plan[] }>("/admin/plans"),
+        request<{ items: ContentItem[] }>("/admin/content"),
+        request<{ items: Flag[] }>("/admin/flags")
+      ]);
+      setPlans(planRes.items);
+      setContentItems(contentRes.items);
+      setFlags(flagRes.items);
+      setLastLoadedAt(Date.now());
+      pushToast("Списки обновлены");
     } catch (error) {
       setErrorText(String(error));
     } finally {
-      setLoading(false);
+      setListLoading(false);
     }
   }
 
   async function searchUsers(): Promise<void> {
     try {
-      setLoading(true);
+      setListLoading(true);
       setErrorText(null);
       const q = userQuery.trim();
       const res = await request<{ items: UserListItem[] }>(`/admin/users?q=${encodeURIComponent(q)}&take=50`);
@@ -209,20 +303,20 @@ export default function HomePage() {
     } catch (error) {
       setErrorText(String(error));
     } finally {
-      setLoading(false);
+      setListLoading(false);
     }
   }
 
   async function loadUserDetail(id: string): Promise<void> {
     try {
-      setLoading(true);
+      setListLoading(true);
       setErrorText(null);
       const d = await request<UserDetail>(`/admin/users/${encodeURIComponent(id)}`);
       setUserDetail(d);
     } catch (error) {
       setErrorText(String(error));
     } finally {
-      setLoading(false);
+      setListLoading(false);
     }
   }
 
@@ -231,12 +325,10 @@ export default function HomePage() {
     method: "POST" | "PATCH" | "DELETE" = "POST",
     body?: unknown
   ): Promise<void> {
-    if (!userDetail?.id) {
-      return;
-    }
+    if (!userDetail?.id) return;
     const uid = userDetail.id;
     try {
-      setLoading(true);
+      setListLoading(true);
       setErrorText(null);
       await request(`/admin/users/${encodeURIComponent(uid)}${subPath}`, {
         method,
@@ -248,79 +340,39 @@ export default function HomePage() {
     } catch (error) {
       setErrorText(String(error));
     } finally {
-      setLoading(false);
+      setListLoading(false);
     }
   }
 
   async function refreshFuntimeCache(): Promise<void> {
     try {
-      setLoading(true);
+      setListLoading(true);
       setErrorText(null);
       await request("/admin/funtime/refresh", { method: "POST" });
       pushToast("FunTime: кэш обновлён");
     } catch (error) {
       setErrorText(String(error));
     } finally {
-      setLoading(false);
+      setListLoading(false);
     }
   }
 
   function updateBotConfig(updater: (prev: BotConfigV1) => BotConfigV1): void {
     setBotConfig((prev) => {
       if (!prev) return prev;
-      const next = updater(prev);
-      return next;
+      return updater(prev);
     });
-  }
-
-  function addMainMenuButton(): void {
-    updateBotConfig((prev) => ({ ...prev, menuButtons: { ...prev.menuButtons, main: [...prev.menuButtons.main, "Новая кнопка"] } }));
-  }
-
-  function addAfterSubscriptionButton(): void {
-    updateBotConfig((prev) => ({
-      ...prev,
-      menuButtons: { ...prev.menuButtons, afterSubscription: [...prev.menuButtons.afterSubscription, "Новая кнопка"] }
-    }));
-  }
-
-  function addChannel(): void {
-    updateBotConfig((prev) => ({
-      ...prev,
-      channels: [
-        ...prev.channels,
-        {
-          title: "Новый канал",
-          username: "@new_channel",
-          inviteLink: "https://t.me/new_channel",
-          isRequired: true,
-          isActive: true
-        }
-      ]
-    }));
   }
 
   async function savePlan(plan: Plan): Promise<void> {
     await request(`/admin/plans/${plan.code}`, { method: "PATCH", body: JSON.stringify(plan) });
-    pushToast("Plan сохранён");
+    pushToast("Тариф сохранён");
     await loadAll();
   }
 
   async function deletePlan(code: string): Promise<void> {
     await request(`/admin/plans/${code}`, { method: "DELETE" });
-    pushToast("Plan удалён");
-    await loadAll();
-  }
-
-  async function saveChannel(channel: Channel): Promise<void> {
-    await request(`/admin/channels/${channel.id}`, { method: "PATCH", body: JSON.stringify(channel) });
-    pushToast("Канал сохранён");
-    await loadAll();
-  }
-
-  async function deleteChannel(id: string): Promise<void> {
-    await request(`/admin/channels/${id}`, { method: "DELETE" });
-    pushToast("Канал удалён");
+    pushToast("Тариф удалён");
     await loadAll();
   }
 
@@ -337,10 +389,12 @@ export default function HomePage() {
   }
 
   const isConfigured = proxyMode ? apiBaseUrl.trim().length > 0 : apiBaseUrl.trim().length > 0 && ownerId.trim().length > 0;
+  const anyBusy = listLoading || botConfigLoading || savingBotConfig;
+
   const statusPill = (() => {
-    if (loading) return { dot: "dotWarn", text: "Загрузка..." };
+    if (anyBusy) return { dot: "dotWarn", text: "Загрузка…" };
     if (!isConfigured) return { dot: "dotBad", text: proxyMode ? "Нужен server env" : "Нужен OWNER_ADMIN_ID" };
-    if (errorText) return { dot: "dotBad", text: "Ошибка" };
+    if (errorText || botConfigError) return { dot: "dotBad", text: "Ошибка" };
     if (lastLoadedAt) return { dot: "dotOk", text: "Готово" };
     return { dot: "dotWarn", text: "Не загружено" };
   })();
@@ -351,27 +405,47 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (tab !== "bot_config" || !isConfigured) return;
+    if (isBotConfigDirty) return;
+    void loadBotConfig({ quiet: true });
+    void loadPublicBotConfig();
+    // Intentionally omit loadBotConfig/loadPublicBotConfig/isBotConfigDirty from deps:
+    // reload when switching to this tab (or API identity), not after every local edit or save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, isConfigured, apiBaseUrl, ownerId]);
+
+  const botChannelsCount = botConfig?.channels?.length ?? 0;
+  const botTabCountLabel = botConfig !== null ? String(botChannelsCount) : "—";
+
   return (
     <main className="container">
       <div className="header">
         <div className="title">
-          <h1>EonFuntimeHelper Admin</h1>
+          <h1>Панель управления ботом</h1>
           <p>
-            Тут настраивается поведение бота: тарифы (plans), обязательные каналы, тексты/кнопки, feature flags.
-            Доступ к админ-ручкам защищён заголовком <code>x-owner-admin-id</code>.
+            Тарифы, пользователи, тексты в БД, флаги — отдельные разделы. <strong>Настройки бота</strong> (сообщения, каналы, меню, лимиты) — один
+            файл конфигурации на сервере; бот читает их через публичный API.
           </p>
           <div className="hint">
             {proxyMode ? (
               <>
-                Production proxy mode: запросы идут через <code>/api/core/*</code>. Owner id не вводится в UI (берётся из server env).
+                Режим прокси: запросы идут через <code>/api/core/*</code>, OWNER задаётся на сервере (<code>OWNER_ADMIN_ID</code>).
               </>
             ) : (
               <>
-                Если видишь <code>TypeError: Failed to fetch</code> — обычно это неправильный API URL, не запущен <code>core-api</code>,
-                или CORS/сеть. Если <code>403/401</code> — не тот OWNER_ADMIN_ID.
+                Без прокси: URL API и numeric OWNER хранятся в <strong>localStorage этого браузера</strong> — не делитесь сессией с посторонними.
               </>
             )}
           </div>
+          {!proxyMode ? (
+            <div className="warnBanner inlineWarn">
+              <span>Локальное хранилище браузера используется для URL и OWNER.</span>
+              <button type="button" className="btn btnSmall" onClick={clearStoredConnection}>
+                Очистить сохранённые
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="pill" title="Текущий статус">
           <span className={`dot ${statusPill.dot}`} />
@@ -384,32 +458,36 @@ export default function HomePage() {
           <div className="grid2">
             <div>
               <div className="label">API base URL</div>
-              <input className="field" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)} placeholder="http://localhost:3000/v1" disabled={proxyMode} />
+              <input
+                className="field"
+                value={apiBaseUrl}
+                onChange={(e) => setApiBaseUrl(e.target.value)}
+                placeholder="http://localhost:3000/v1"
+                disabled={proxyMode}
+              />
             </div>
             <div>
               <div className="label">OWNER_ADMIN_ID</div>
-              <input className="field" value={ownerId} onChange={(e) => setOwnerId(e.target.value)} placeholder="например 815991920" disabled={proxyMode} />
+              <input
+                className="field"
+                value={ownerId}
+                onChange={(e) => setOwnerId(e.target.value)}
+                placeholder="например 815991920"
+                disabled={proxyMode}
+              />
             </div>
           </div>
 
           <div className="rowBetween">
             <div className="row">
-              <button className="btn btnPrimary" disabled={!isConfigured || loading} onClick={() => void loadAll()}>
-                {loading ? "Загружаю..." : "Обновить данные"}
+              <button className="btn btnPrimary" disabled={!isConfigured || listLoading} onClick={() => void loadAll()}>
+                {listLoading ? "Загружаю…" : "Обновить списки"}
               </button>
-              {lastLoadedAt ? <span className="hint">последняя загрузка: {new Date(lastLoadedAt).toLocaleTimeString()}</span> : null}
+              {lastLoadedAt ? <span className="hint">обновлено: {new Date(lastLoadedAt).toLocaleTimeString()}</span> : null}
             </div>
             <div className="tabs" aria-label="tabs">
               <button className={`tab ${tab === "plans" ? "tabActive" : ""}`} onClick={() => setTab("plans")}>
-                Plans <span className="muted">({plans.length})</span>
-              </button>
-              <button
-                className={`tab ${tab === "channels" ? "tabActive" : ""}`}
-                onClick={() => {
-                  setTab("channels");
-                }}
-              >
-                Channels <span className="muted">({channels.length})</span>
+                Тарифы <span className="muted">({plans.length})</span>
               </button>
               <button
                 className={`tab ${tab === "users" ? "tabActive" : ""}`}
@@ -417,22 +495,21 @@ export default function HomePage() {
                   setTab("users");
                 }}
               >
-                Users
+                Пользователи
               </button>
               <button className={`tab ${tab === "content" ? "tabActive" : ""}`} onClick={() => setTab("content")}>
-                Content <span className="muted">({contentItems.length})</span>
+                Контент БД <span className="muted">({contentItems.length})</span>
               </button>
               <button className={`tab ${tab === "flags" ? "tabActive" : ""}`} onClick={() => setTab("flags")}>
-                Feature flags <span className="muted">({flags.length})</span>
+                Флаги <span className="muted">({flags.length})</span>
               </button>
               <button
                 className={`tab ${tab === "bot_config" ? "tabActive" : ""}`}
                 onClick={() => {
                   setTab("bot_config");
-                  if (isConfigured) void loadBotConfig();
                 }}
               >
-                Bot config
+                Настройки бота <span className="muted">({botTabCountLabel})</span>
               </button>
             </div>
           </div>
@@ -440,8 +517,8 @@ export default function HomePage() {
           {!isConfigured ? (
             <div className="errorBox">
               {proxyMode
-                ? "Proxy mode: на сервере должны быть заданы OWNER_ADMIN_ID и CORE_API_INTERNAL_URL."
-                : "Введи OWNER_ADMIN_ID (из .env `OWNER_ADMIN_ID`) и нажми “Обновить данные”."}
+                ? "На сервере должны быть заданы OWNER_ADMIN_ID и CORE_API_INTERNAL_URL."
+                : "Введите OWNER_ADMIN_ID из .env и нажмите «Обновить списки»."}
             </div>
           ) : null}
           {errorText ? <div className="errorBox">{errorText}</div> : null}
@@ -459,13 +536,13 @@ export default function HomePage() {
           <div className="cardBody stack">
             <div className="rowBetween">
               <div className="stack" style={{ gap: 4 }}>
-                <div style={{ fontSize: 16, fontWeight: 600 }}>Plans</div>
-                <div className="hint">Тарифы/пакеты. Бот и биллинг будут опираться на эти записи.</div>
+                <div className="sectionTitle">Тарифы</div>
+                <div className="hint">Пакеты и цены в PostgreSQL.</div>
               </div>
             </div>
 
             {plans.length === 0 ? (
-              <div className="hint">Пусто. Нажми “Обновить данные”.</div>
+              <div className="hint">Пусто. Нажми «Обновить списки».</div>
             ) : (
               <table className="table">
                 <tbody>
@@ -511,82 +588,10 @@ export default function HomePage() {
                       </td>
                       <td style={{ width: 200 }}>
                         <div className="row" style={{ justifyContent: "flex-end" }}>
-                          <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void savePlan(plan)}>
+                          <button className="btn btnPrimary btnSmall" disabled={!isConfigured || listLoading} onClick={() => void savePlan(plan)}>
                             Сохранить
                           </button>
-                          <button className="btn btnDanger btnSmall" disabled={!isConfigured || loading} onClick={() => void deletePlan(plan.code)}>
-                            Удалить
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {tab === "channels" ? (
-        <div className="card">
-          <div className="cardBody stack">
-            <div className="stack" style={{ gap: 4 }}>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Channels</div>
-              <div className="hint">
-                Каналы в БД (каталог). Живая «обязаловка» для бота настраивается в табе <strong>Bot config</strong> (поле{" "}
-                <code>channels</code> + <code>flags.subscriptionsCheckEnabled</code>).
-              </div>
-            </div>
-
-            {channels.length === 0 ? (
-              <div className="hint">Пусто. Нажми “Обновить данные”.</div>
-            ) : (
-              <table className="table">
-                <tbody>
-                  {channels.map((channel) => (
-                    <tr key={channel.id} className="tr">
-                      <td style={{ width: 260 }}>
-                        <div className="label">tgChannelId</div>
-                        <input
-                          className="field"
-                          value={channel.tgChannelId}
-                          onChange={(e) =>
-                            setChannels((prev) => prev.map((item) => (item.id === channel.id ? { ...item, tgChannelId: e.target.value } : item)))
-                          }
-                        />
-                        <div className="hint">id: <code>{channel.id}</code></div>
-                      </td>
-                      <td>
-                        <div className="label">inviteLink</div>
-                        <input
-                          className="field"
-                          value={channel.inviteLink ?? ""}
-                          onChange={(e) =>
-                            setChannels((prev) => prev.map((item) => (item.id === channel.id ? { ...item, inviteLink: e.target.value } : item)))
-                          }
-                          placeholder="https://t.me/... или invite link"
-                        />
-                      </td>
-                      <td style={{ width: 170 }}>
-                        <div className="label">active</div>
-                        <label className="row" style={{ gap: 10 }}>
-                          <input
-                            type="checkbox"
-                            checked={channel.isActive}
-                            onChange={(e) =>
-                              setChannels((prev) => prev.map((item) => (item.id === channel.id ? { ...item, isActive: e.target.checked } : item)))
-                            }
-                          />
-                          <span className="hint">{channel.isActive ? "включён" : "выключен"}</span>
-                        </label>
-                      </td>
-                      <td style={{ width: 200 }}>
-                        <div className="row" style={{ justifyContent: "flex-end" }}>
-                          <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void saveChannel(channel)}>
-                            Сохранить
-                          </button>
-                          <button className="btn btnDanger btnSmall" disabled={!isConfigured || loading} onClick={() => void deleteChannel(channel.id)}>
+                          <button className="btn btnDanger btnSmall" disabled={!isConfigured || listLoading} onClick={() => void deletePlan(plan.code)}>
                             Удалить
                           </button>
                         </div>
@@ -604,10 +609,8 @@ export default function HomePage() {
         <div className="card">
           <div className="cardBody stack">
             <div className="stack" style={{ gap: 4 }}>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Users</div>
-              <div className="hint">
-                Поиск по username или numeric Telegram id. Операции меняют состояние в PostgreSQL (не в BotConfig).
-              </div>
+              <div className="sectionTitle">Пользователи</div>
+              <div className="hint">Поиск по username или numeric Telegram id. Данные в PostgreSQL.</div>
             </div>
             <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <input
@@ -617,10 +620,10 @@ export default function HomePage() {
                 value={userQuery}
                 onChange={(e) => setUserQuery(e.target.value)}
               />
-              <button className="btn btnPrimary" disabled={!isConfigured || loading} onClick={() => void searchUsers()}>
+              <button className="btn btnPrimary" disabled={!isConfigured || listLoading} onClick={() => void searchUsers()}>
                 Найти
               </button>
-              <button className="btn" disabled={!isConfigured || loading} onClick={() => void refreshFuntimeCache()}>
+              <button className="btn" disabled={!isConfigured || listLoading} onClick={() => void refreshFuntimeCache()}>
                 Обновить кэш ивентов
               </button>
             </div>
@@ -640,11 +643,7 @@ export default function HomePage() {
                         {u.isBanned ? <div className="errorBox" style={{ marginTop: 6 }}>banned</div> : null}
                       </td>
                       <td style={{ width: 140 }}>
-                        <button
-                          className="btn btnPrimary btnSmall"
-                          disabled={!isConfigured || loading}
-                          onClick={() => void loadUserDetail(u.id)}
-                        >
+                        <button className="btn btnPrimary btnSmall" disabled={!isConfigured || listLoading} onClick={() => void loadUserDetail(u.id)}>
                           Открыть
                         </button>
                       </td>
@@ -676,53 +675,25 @@ export default function HomePage() {
                     )}
                   </div>
                   <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      className="btn btnPrimary btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/unlimited", "PATCH")}
-                    >
+                    <button className="btn btnPrimary btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/unlimited", "PATCH")}>
                       Grant unlimited
                     </button>
-                    <button
-                      className="btn btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/unlimited", "DELETE")}
-                    >
+                    <button className="btn btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/unlimited", "DELETE")}>
                       Revoke unlimited
                     </button>
-                    <button
-                      className="btn btnDanger btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/ban", "PATCH", { banned: true })}
-                    >
+                    <button className="btn btnDanger btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/ban", "PATCH", { banned: true })}>
                       Ban
                     </button>
-                    <button
-                      className="btn btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/ban", "PATCH", { banned: false })}
-                    >
+                    <button className="btn btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/ban", "PATCH", { banned: false })}>
                       Unban
                     </button>
-                    <button
-                      className="btn btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/reset-cooldown", "POST")}
-                    >
+                    <button className="btn btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/reset-cooldown", "POST")}>
                       Reset cooldown
                     </button>
-                    <button
-                      className="btn btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/reset-daily", "POST")}
-                    >
+                    <button className="btn btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/reset-daily", "POST")}>
                       Reset daily usage
                     </button>
-                    <button
-                      className="btn btnSmall"
-                      disabled={!isConfigured || loading}
-                      onClick={() => void postUserAction("/test-notification", "POST")}
-                    >
+                    <button className="btn btnSmall" disabled={!isConfigured || listLoading} onClick={() => void postUserAction("/test-notification", "POST")}>
                       Test notification
                     </button>
                   </div>
@@ -737,14 +708,12 @@ export default function HomePage() {
         <div className="card">
           <div className="cardBody stack">
             <div className="stack" style={{ gap: 4 }}>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Content</div>
-              <div className="hint">
-                Тексты/настройки для бота. Например <code>menu.buttons</code> (кнопки меню) и разные подсказки.
-              </div>
+              <div className="sectionTitle">Контент (БД)</div>
+              <div className="hint">Отдельные ключи в базе — не путать с «Настройки бота».</div>
             </div>
 
             {contentItems.length === 0 ? (
-              <div className="hint">Пусто. Нажми “Обновить данные”.</div>
+              <div className="hint">Пусто. Нажми «Обновить списки».</div>
             ) : (
               <div className="stack" style={{ gap: 12 }}>
                 {contentItems.map((item) => (
@@ -755,9 +724,8 @@ export default function HomePage() {
                           <div style={{ fontWeight: 600 }}>
                             <code>{item.key}</code> <span className="hint">({item.locale})</span>
                           </div>
-                          <div className="hint">Редактируй текст и нажми “Сохранить”.</div>
                         </div>
-                        <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void saveContent(item)}>
+                        <button className="btn btnPrimary btnSmall" disabled={!isConfigured || listLoading} onClick={() => void saveContent(item)}>
                           Сохранить
                         </button>
                       </div>
@@ -783,12 +751,12 @@ export default function HomePage() {
         <div className="card">
           <div className="cardBody stack">
             <div className="stack" style={{ gap: 4 }}>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>Feature Flags</div>
-              <div className="hint">Фичефлаги, чтобы включать/выключать поведение без деплоя.</div>
+              <div className="sectionTitle">Feature flags</div>
+              <div className="hint">Флаги в PostgreSQL.</div>
             </div>
 
             {flags.length === 0 ? (
-              <div className="hint">Пусто. Нажми “Обновить данные”.</div>
+              <div className="hint">Пусто. Нажми «Обновить списки».</div>
             ) : (
               <table className="table">
                 <tbody>
@@ -820,7 +788,7 @@ export default function HomePage() {
                       </td>
                       <td style={{ width: 150 }}>
                         <div className="row" style={{ justifyContent: "flex-end" }}>
-                          <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void saveFlag(flag)}>
+                          <button className="btn btnPrimary btnSmall" disabled={!isConfigured || listLoading} onClick={() => void saveFlag(flag)}>
                             Сохранить
                           </button>
                         </div>
@@ -837,311 +805,37 @@ export default function HomePage() {
       {tab === "bot_config" ? (
         <div className="card">
           <div className="cardBody stack">
-            <div className="rowBetween">
-              <div className="stack" style={{ gap: 4 }}>
-                <div style={{ fontSize: 16, fontWeight: 600 }}>BotConfigV1</div>
-                <div className="hint">
-                  Единая схема для <code>bot-service</code>, <code>core-api</code>, <code>admin-web</code>. Изменения применяются ботом
-                  автоматически (sync).
-                </div>
-              </div>
-              <div className="row">
-                <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void loadBotConfig()}>
-                  Обновить
-                </button>
-                <button className="btn btnPrimary btnSmall" disabled={!isConfigured || loading} onClick={() => void saveBotConfig()}>
-                  Сохранить
-                </button>
-              </div>
-            </div>
+            {botConfigLoading && !botConfig ? (
+              <div className="hint">Загружаю конфиг с сервера…</div>
+            ) : null}
             {botConfig ? (
-              <div className="stack" style={{ gap: 16 }}>
-                <div className="card" style={{ boxShadow: "none" }}>
-                  <div className="cardBody stack">
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>Content</div>
-                    <div className="label">startMessage</div>
-                    <textarea
-                      className="field textarea"
-                      value={botConfig.content.startMessage}
-                      onChange={(e) => updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, startMessage: e.target.value } }))}
-                    />
-                    <div className="label">subscriptionRequiredMessage</div>
-                    <textarea
-                      className="field textarea"
-                      value={botConfig.content.subscriptionRequiredMessage}
-                      onChange={(e) =>
-                        updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, subscriptionRequiredMessage: e.target.value } }))
-                      }
-                    />
-                    <div className="label">eventsUnavailableMessage</div>
-                    <textarea
-                      className="field textarea"
-                      value={botConfig.content.eventsUnavailableMessage}
-                      onChange={(e) =>
-                        updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, eventsUnavailableMessage: e.target.value } }))
-                      }
-                    />
-                    <div className="label">supportMessage</div>
-                    <textarea
-                      className="field textarea"
-                      value={botConfig.content.supportMessage}
-                      onChange={(e) => updateBotConfig((prev) => ({ ...prev, content: { ...prev.content, supportMessage: e.target.value } }))}
-                    />
-                  </div>
-                </div>
-
-                <div className="card" style={{ boxShadow: "none" }}>
-                  <div className="cardBody stack">
-                    <div className="rowBetween">
-                      <div style={{ fontSize: 15, fontWeight: 600 }}>Menu Buttons</div>
-                      <div className="row">
-                        <button className="btn btnPrimary btnSmall" type="button" onClick={addMainMenuButton}>
-                          + Main
-                        </button>
-                        <button className="btn btnPrimary btnSmall" type="button" onClick={addAfterSubscriptionButton}>
-                          + AfterSub
-                        </button>
-                      </div>
-                    </div>
-                    <div className="label">main</div>
-                    {botConfig.menuButtons.main.map((btn, idx) => (
-                      <div key={`main-${idx}`} className="row">
-                        <input
-                          className="field"
-                          value={btn}
-                          onChange={(e) =>
-                            updateBotConfig((prev) => {
-                              const next = [...prev.menuButtons.main];
-                              next[idx] = e.target.value;
-                              return { ...prev, menuButtons: { ...prev.menuButtons, main: next } };
-                            })
-                          }
-                        />
-                        <button
-                          className="btn btnDanger btnSmall"
-                          type="button"
-                          onClick={() =>
-                            updateBotConfig((prev) => ({
-                              ...prev,
-                              menuButtons: { ...prev.menuButtons, main: prev.menuButtons.main.filter((_, i) => i !== idx) }
-                            }))
-                          }
-                        >
-                          Удалить
-                        </button>
-                      </div>
-                    ))}
-                    <div className="label">afterSubscription</div>
-                    {botConfig.menuButtons.afterSubscription.map((btn, idx) => (
-                      <div key={`after-${idx}`} className="row">
-                        <input
-                          className="field"
-                          value={btn}
-                          onChange={(e) =>
-                            updateBotConfig((prev) => {
-                              const next = [...prev.menuButtons.afterSubscription];
-                              next[idx] = e.target.value;
-                              return { ...prev, menuButtons: { ...prev.menuButtons, afterSubscription: next } };
-                            })
-                          }
-                        />
-                        <button
-                          className="btn btnDanger btnSmall"
-                          type="button"
-                          onClick={() =>
-                            updateBotConfig((prev) => ({
-                              ...prev,
-                              menuButtons: {
-                                ...prev.menuButtons,
-                                afterSubscription: prev.menuButtons.afterSubscription.filter((_, i) => i !== idx)
-                              }
-                            }))
-                          }
-                        >
-                          Удалить
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="card" style={{ boxShadow: "none" }}>
-                  <div className="cardBody stack">
-                    <div className="rowBetween">
-                      <div style={{ fontSize: 15, fontWeight: 600 }}>Channels</div>
-                      <button className="btn btnPrimary btnSmall" type="button" onClick={addChannel}>
-                        + Channel
-                      </button>
-                    </div>
-                    {botConfig.channels.map((channel, idx) => (
-                      <div key={`ch-${idx}`} className="card" style={{ boxShadow: "none" }}>
-                        <div className="cardBody stack">
-                          <input
-                            className="field"
-                            value={channel.title}
-                            onChange={(e) =>
-                              updateBotConfig((prev) => {
-                                const next = [...prev.channels];
-                                next[idx] = { ...next[idx], title: e.target.value };
-                                return { ...prev, channels: next };
-                              })
-                            }
-                            placeholder="title"
-                          />
-                          <input
-                            className="field"
-                            value={channel.username}
-                            onChange={(e) =>
-                              updateBotConfig((prev) => {
-                                const next = [...prev.channels];
-                                next[idx] = { ...next[idx], username: e.target.value };
-                                return { ...prev, channels: next };
-                              })
-                            }
-                            placeholder="@username"
-                          />
-                          <input
-                            className="field"
-                            value={channel.inviteLink}
-                            onChange={(e) =>
-                              updateBotConfig((prev) => {
-                                const next = [...prev.channels];
-                                next[idx] = { ...next[idx], inviteLink: e.target.value };
-                                return { ...prev, channels: next };
-                              })
-                            }
-                            placeholder="https://t.me/..."
-                          />
-                          <div className="row">
-                            <label className="row" style={{ gap: 8 }}>
-                              <input
-                                type="checkbox"
-                                checked={channel.isRequired}
-                                onChange={(e) =>
-                                  updateBotConfig((prev) => {
-                                    const next = [...prev.channels];
-                                    next[idx] = { ...next[idx], isRequired: e.target.checked };
-                                    return { ...prev, channels: next };
-                                  })
-                                }
-                              />
-                              isRequired
-                            </label>
-                            <label className="row" style={{ gap: 8 }}>
-                              <input
-                                type="checkbox"
-                                checked={channel.isActive}
-                                onChange={(e) =>
-                                  updateBotConfig((prev) => {
-                                    const next = [...prev.channels];
-                                    next[idx] = { ...next[idx], isActive: e.target.checked };
-                                    return { ...prev, channels: next };
-                                  })
-                                }
-                              />
-                              isActive
-                            </label>
-                          </div>
-                          <button
-                            className="btn btnDanger btnSmall"
-                            type="button"
-                            onClick={() =>
-                              updateBotConfig((prev) => ({ ...prev, channels: prev.channels.filter((_, i) => i !== idx) }))
-                            }
-                          >
-                            Удалить канал
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="card" style={{ boxShadow: "none" }}>
-                  <div className="cardBody stack">
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>Flags & Limits</div>
-                    <label className="row" style={{ gap: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={botConfig.flags.subscriptionsCheckEnabled}
-                        onChange={(e) =>
-                          updateBotConfig((prev) => ({
-                            ...prev,
-                            flags: { ...prev.flags, subscriptionsCheckEnabled: e.target.checked }
-                          }))
-                        }
-                      />
-                      subscriptionsCheckEnabled
-                    </label>
-                    <label className="row" style={{ gap: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={botConfig.flags.eventsEnabled}
-                        onChange={(e) => updateBotConfig((prev) => ({ ...prev, flags: { ...prev.flags, eventsEnabled: e.target.checked } }))}
-                      />
-                      eventsEnabled
-                    </label>
-                    <label className="row" style={{ gap: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={botConfig.flags.notificationsEnabled}
-                        onChange={(e) =>
-                          updateBotConfig((prev) => ({ ...prev, flags: { ...prev.flags, notificationsEnabled: e.target.checked } }))
-                        }
-                      />
-                      notificationsEnabled
-                    </label>
-                    <label className="row" style={{ gap: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={botConfig.flags.paymentsEnabled}
-                        onChange={(e) => updateBotConfig((prev) => ({ ...prev, flags: { ...prev.flags, paymentsEnabled: e.target.checked } }))}
-                      />
-                      paymentsEnabled
-                    </label>
-                    <div className="label">cooldownSeconds</div>
-                    <input
-                      className="field"
-                      type="number"
-                      min={0}
-                      max={3600}
-                      value={botConfig.limits.cooldownSeconds}
-                      onChange={(e) =>
-                        updateBotConfig((prev) => ({
-                          ...prev,
-                          limits: { ...prev.limits, cooldownSeconds: Math.max(0, Number(e.target.value) || 0) }
-                        }))
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
+              <BotConfigPanel
+                botConfig={botConfig}
+                botConfigHistory={botConfigHistory}
+                publicConfig={publicBotConfig}
+                publicConfigError={publicBotConfigError}
+                isDirty={isBotConfigDirty}
+                isLoadingAdmin={botConfigLoading}
+                isSaving={savingBotConfig}
+                isLoadingPublic={loadingPublicConfig}
+                validationLines={validationLines}
+                botConfigError={botConfigError}
+                onUpdate={updateBotConfig}
+                onReload={() => void loadBotConfig()}
+                onSave={() => void saveBotConfig()}
+                onDiscard={discardBotConfigDraft}
+                onRefreshPublic={() => void loadPublicBotConfig()}
+                onRollback={(id) => void rollbackBotConfig(id)}
+                disabled={!isConfigured}
+              />
             ) : (
-              <div className="hint">Нажми “Обновить”, чтобы загрузить Bot config.</div>
+              <div className="stack" style={{ gap: 12 }}>
+                <div className="hint">Загрузка не выполнена. Нажми «Настройки бота» снова или открой вкладку — конфиг подтянется с сервера.</div>
+                <button className="btn btnPrimary" type="button" disabled={!isConfigured || botConfigLoading} onClick={() => void loadBotConfig()}>
+                  {botConfigLoading ? "Загрузка…" : "Загрузить настройки бота"}
+                </button>
+              </div>
             )}
-
-            <details>
-              <summary className="hint">JSON preview</summary>
-              <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{botConfig ? JSON.stringify(botConfig, null, 2) : "not loaded"}</pre>
-            </details>
-
-            <div className="stack" style={{ gap: 8 }}>
-              <div style={{ fontWeight: 600 }}>History / rollback</div>
-              {botConfigHistory.length === 0 ? (
-                <div className="hint">История пока пустая (появится после первого сохранения).</div>
-              ) : (
-                <div className="stack" style={{ gap: 6 }}>
-                  {botConfigHistory.slice(0, 10).map((h) => (
-                    <div key={h.id} className="rowBetween">
-                      <code>{h.id}</code>
-                      <button className="btn btnDanger btnSmall" disabled={!isConfigured || loading} onClick={() => void rollbackBotConfig(h.id)}>
-                        Rollback
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
         </div>
       ) : null}

@@ -140,3 +140,37 @@ code{
   color:rgba(255,255,255,.92);
   white-space:pre-wrap;
 }
+
+.warnBanner{
+  border:1px solid rgba(255,209,92,.45);
+  background:rgba(255,209,92,.10);
+  padding:10px 12px;border-radius:12px;
+  color:rgba(255,255,255,.92);
+  font-size:13px;line-height:1.45;
+}
+.inlineWarn{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin-top:8px;
+}
+
+.successBanner{
+  border:1px solid rgba(47,228,167,.45);
+  background:rgba(47,228,167,.08);
+  padding:10px 12px;border-radius:12px;
+  color:rgba(255,255,255,.9);
+}
+
+.sectionTitle{font-size:17px;font-weight:650;letter-spacing:.2px;color:var(--text)}
+.sectionLead{margin:0;color:var(--muted);font-size:13px;line-height:1.45;max-width:720px}
+.sectionCard{background:linear-gradient(180deg,rgba(255,255,255,.05),transparent 100%)}
+.innerChannelCard{background:rgba(0,0,0,.14);border-color:rgba(255,255,255,.1)}
+.flagRow{align-items:flex-start}
+.blockHint{display:block;margin-top:4px}
+.dangerText{color:rgba(255,180,190,.95)}
+.supportDetails{margin-top:4px}
+.preJson{font-size:11px;overflow:auto;max-height:280px;padding:10px;border-radius:10px;background:rgba(0,0,0,.25);border:1px solid var(--border)}
+.historyRow{align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.historyRow:last-child{border-bottom:none}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+.validationList{margin:6px 0 0 18px;padding:0}
+.validationList li{margin:4px 0}

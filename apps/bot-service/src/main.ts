@@ -146,7 +146,7 @@ async function startManualPolling(): Promise<void> {
       });
       for (const update of updates) {
         offset = update.update_id + 1;
-        await bot.handleUpdate(update);
+        await (bot as any).handleUpdate(update);
       }
     } catch (error) {
       console.error("polling error", error);

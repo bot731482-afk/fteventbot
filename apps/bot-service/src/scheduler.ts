@@ -1,4 +1,3 @@
-import { logRateLimited } from "./logger";
 import type { ConfigManager } from "./config";
 
 export interface SchedulerOptions {
@@ -9,7 +8,6 @@ export interface SchedulerOptions {
 export function startScheduler(options: SchedulerOptions): void {
   const enabled = options.enabled ?? true;
   if (!enabled) {
-    console.log("scheduler disabled");
     return;
   }
 
@@ -17,6 +15,6 @@ export function startScheduler(options: SchedulerOptions): void {
   // Remote config sync already runs inside ConfigManager on an interval.
   // This hook exists to host future periodic tasks (notifications, reminders, retries)
   // without requiring a separate worker process.
-  logRateLimited("info", "scheduler.started", "scheduler started (bot-service)", 60_000);
+  void options.configManager;
 }
 

@@ -68,7 +68,7 @@ function httpGet(url) {
       target,
       { timeout: 3000 },
       (res) => {
-        const ok = res.statusCode && res.statusCode >= 200 && res.statusCode < 500;
+        const ok = res.statusCode && res.statusCode >= 200 && res.statusCode < 400;
         res.resume();
         if (!ok) {
           reject(new Error(`status ${res.statusCode}`));

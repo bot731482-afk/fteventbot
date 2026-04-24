@@ -10,3 +10,5 @@ apps/bot-service/bot-config.cache.json
 *.tsbuildinfo
 logs/
 apps/bot-service/bot-polling.offset.json
+apps/core-api/bot-config.store.json
+apps/core-api/bot-config.history/

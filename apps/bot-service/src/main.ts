@@ -11,6 +11,8 @@ const coreApiBaseUrl = (process.env.CORE_API_URL ?? "").trim();
 const paymentsMode = (process.env.PAYMENTS_MODE ?? "free").trim().toLowerCase();
 const botEnabled = (process.env.BOT_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const launchRetryMs = Math.max(1000, Number(process.env.BOT_LAUNCH_RETRY_MS ?? "30000") || 30000);
+const pollingDebug = (process.env.BOT_POLLING_DEBUG ?? "false").trim().toLowerCase() === "true";
+const schedulerEnabled = (process.env.SCHEDULER_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const coreApiRateLimitPerMinute = 100;
 const coreApiMinIntervalMs = Math.ceil(60000 / coreApiRateLimitPerMinute);
 let nextCoreApiRequestAt = 0;
@@ -203,6 +205,15 @@ function getUpdateMeta(update: any): {
   };
 }
 
+function logPollingDebug(message: string, payload?: unknown): void {
+  if (!pollingDebug) return;
+  if (payload === undefined) {
+    console.log(`[polling] ${message}`);
+    return;
+  }
+  console.log(`[polling] ${message}`, payload);
+}
+
 async function loadOffsetState(): Promise<void> {
   try {
     const raw = await readFile(offsetStatePath, "utf8");
@@ -210,9 +221,19 @@ async function loadOffsetState(): Promise<void> {
     const next = Number(parsed.offset ?? 0);
     if (Number.isInteger(next) && next >= 0) {
       offset = next;
+      logPollingDebug("offset loaded", { offset });
+      return;
     }
-  } catch {
-    // first launch or missing/corrupted state file
+    logRateLimited("warn", "polling.offset.invalid", `[polling] invalid offset in state file, resetting to zero (${offsetStatePath})`, 60_000);
+    offset = 0;
+  } catch (error) {
+    const code = String((error as any)?.code ?? "");
+    if (code === "ENOENT") {
+      logRateLimited("info", "polling.offset.missing", "[polling] no persisted offset found, starting from current Telegram queue", 60_000);
+    } else {
+      logRateLimited("warn", "polling.offset.load_failed", `[polling] failed to load offset state, resetting to zero (${String(error)})`, 60_000);
+    }
+    offset = 0;
   }
 }
 
@@ -250,12 +271,12 @@ async function processUpdate(update: any): Promise<void> {
       offset = nextOffset;
       await safePersistOffsetState("duplicate_update");
     }
-    console.log("[polling] duplicate update skipped", { ...meta, offset });
+    logPollingDebug("duplicate update skipped", { ...meta, offset });
     return;
   }
 
   let ok = false;
-  console.log("[polling] update received", meta);
+  logPollingDebug("update received", meta);
   try {
     await (bot as any).handleUpdate(update);
     ok = true;
@@ -269,37 +290,57 @@ async function processUpdate(update: any): Promise<void> {
       await safePersistOffsetState("ack_update");
     }
     rememberProcessedUpdate(updateId);
-    console.log("[polling] update ack", { updateId, ok, offset });
+    logPollingDebug("update ack", { updateId, ok, offset });
   }
+}
+
+function withJitter(ms: number): number {
+  const jitter = Math.floor(ms * 0.2 * Math.random());
+  return ms + jitter;
+}
+
+function getTelegramRetryAfterMs(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const response = (error as any).response;
+  const retryAfter = Number(response?.parameters?.retry_after);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return retryAfter * 1000;
+  }
+  return null;
 }
 
 async function startManualPolling(): Promise<void> {
   console.log("manual polling started");
   await loadOffsetState();
+  let pollingErrorBackoffMs = 1000;
   while (true) {
     try {
-      console.log("waiting updates, offset:", offset);
       const updates = await (bot.telegram as any).getUpdates({
         offset,
         timeout: 30,
         limit: 100,
         allowed_updates: ["message", "callback_query"]
       });
-      console.log("updates fetched:", updates.length);
+      pollingErrorBackoffMs = 1000;
       if (!updates.length) {
         continue;
       }
+      logPollingDebug("updates fetched", { count: updates.length, offset });
       for (const update of updates) {
         await processUpdate(update);
       }
     } catch (error) {
+      const retryAfterMs = getTelegramRetryAfterMs(error);
+      const sleepMs = retryAfterMs ?? withJitter(Math.min(pollingErrorBackoffMs, 30_000));
       if (isConflict409(error)) {
-        console.warn("409 conflict detected");
-        await sleep(5000);
-        continue;
+        logRateLimited("warn", "polling.conflict", "[polling] Telegram 409 conflict detected, retrying with backoff", 60_000);
+      } else if (retryAfterMs) {
+        logRateLimited("warn", "polling.retry_after", `[polling] Telegram requested retry_after=${Math.ceil(retryAfterMs / 1000)}s`, 60_000);
+      } else {
+        logRateLimited("warn", "polling.error", `[polling] polling error, retrying (${String((error as any)?.message ?? error)})`, 60_000);
       }
-      console.error("polling error", error);
-      await sleep(3000);
+      await sleep(sleepMs);
+      pollingErrorBackoffMs = Math.min(pollingErrorBackoffMs * 2, 30_000);
     }
   }
 }
@@ -309,28 +350,37 @@ async function launchWithRetry(): Promise<void> {
     console.log("bot disabled via BOT_ENABLED=false");
     return;
   }
+  let launchAttempt = 0;
   for (;;) {
     try {
       configManager = await ConfigManager.create({ coreApiBaseUrl, remoteSyncIntervalMs: 60_000 });
-      startScheduler({ configManager });
-      console.log("before getMe");
+      console.log("startup: config manager ready");
+      startScheduler({ configManager, enabled: schedulerEnabled });
+      console.log(`startup: scheduler ${schedulerEnabled ? "enabled" : "disabled"}`);
       const me = await bot.telegram.getMe();
-      console.log("getMe success:", me.username);
+      console.log("startup: telegram identity verified", me.username);
       try {
         await bot.telegram.deleteWebhook();
       } catch (error) {
-        console.warn("deleteWebhook failed", error);
+        logRateLimited("warn", "telegram.delete_webhook_failed", `startup: deleteWebhook failed (${String(error)})`, 60_000);
       }
-      await sleep(1500);
-      console.log("before manual polling");
+      console.log("startup: polling loop starting");
       await startManualPolling();
       return;
     } catch (error) {
+      launchAttempt += 1;
       if (isConflict409(error)) {
         console.warn("telegram returned 409 conflict; another bot instance is active, will retry");
       }
-      console.error(`bot launch failed; retrying in ${Math.ceil(launchRetryMs / 1000)}s`, error);
-      await sleep(launchRetryMs);
+      const cappedBackoffMs = Math.min(120_000, launchRetryMs * 2 ** Math.max(0, launchAttempt - 1));
+      const sleepMs = withJitter(cappedBackoffMs);
+      logRateLimited(
+        "error",
+        "bot.launch.failed",
+        `startup: launch failed, retrying in ${Math.ceil(sleepMs / 1000)}s (${String((error as any)?.message ?? error)})`,
+        10_000
+      );
+      await sleep(sleepMs);
     }
   }
 }

@@ -48,6 +48,31 @@ Production SaaS platform for FunTime event tracking:
    - `pnpm start:bot`
    - or sequential orchestrator: `pnpm start:stack`
 
+## VPS Production (localhost core-api, nginx + systemd)
+
+Target model:
+- `core-api` binds only `127.0.0.1:3000`
+- only `admin-web` is exposed externally (via nginx + basic auth)
+- `admin-web` proxies server-side to `core-api` (`/api/core/*`) and injects `OWNER_ADMIN_ID` from server env
+- `bot-service` talks to core-api via internal URL (`http://127.0.0.1:3000/v1`)
+
+### Required env (server-side)
+
+- `OWNER_ADMIN_ID`: secret owner id (never typed into UI)
+- `CORE_API_INTERNAL_URL=http://127.0.0.1:3000/v1`
+- `NEXT_PUBLIC_ADMIN_PROXY_MODE=true` (disables UI editing of apiBaseUrl/owner id)
+
+### systemd units
+
+See:
+- `deploy/systemd/core-api.service`
+- `deploy/systemd/admin-web.service`
+- `deploy/systemd/bot-service.service`
+
+### nginx config (basic auth)
+
+See `deploy/nginx/admin-web.conf`.
+
 ## Bot-first Runtime Guarantees
 
 - `bot-service` starts with local fallback config and cached config.

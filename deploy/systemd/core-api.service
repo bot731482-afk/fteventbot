@@ -1,0 +1,17 @@
+[Unit]
+Description=fteventbot core-api
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fteventbot
+EnvironmentFile=/opt/fteventbot/.env
+Environment=NODE_ENV=production
+Environment=CORE_API_HOST=127.0.0.1
+Environment=CORE_API_PORT=3000
+ExecStart=/usr/bin/pnpm --filter @eon/core-api start
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

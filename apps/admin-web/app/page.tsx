@@ -27,8 +27,9 @@ type BotConfigHistoryEntry = { id: string; createdAt: string };
 type TabKey = "plans" | "channels" | "content" | "flags" | "bot_config";
 
 export default function HomePage() {
-  const [apiBaseUrl, setApiBaseUrl] = useState(process.env.NEXT_PUBLIC_CORE_API_URL ?? "http://localhost:3000/v1");
-  const [ownerId, setOwnerId] = useState("");
+  const proxyMode = (process.env.NEXT_PUBLIC_ADMIN_PROXY_MODE ?? "false").trim().toLowerCase() === "true";
+  const [apiBaseUrl, setApiBaseUrl] = useState(proxyMode ? "/api/core" : process.env.NEXT_PUBLIC_CORE_API_URL ?? "http://localhost:3000/v1");
+  const [ownerId, setOwnerId] = useState(proxyMode ? "server" : "");
   const [plans, setPlans] = useState<Plan[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [contentItems, setContentItems] = useState<ContentItem[]>([]);
@@ -45,13 +46,14 @@ export default function HomePage() {
   const headers = useMemo(
     () => ({
       "content-type": "application/json",
-      "x-owner-admin-id": ownerId
+      ...(proxyMode ? {} : { "x-owner-admin-id": ownerId })
     }),
-    [ownerId]
+    [ownerId, proxyMode]
   );
 
   useEffect(() => {
     try {
+      if (proxyMode) return;
       const savedApi = localStorage.getItem("eon.admin.apiBaseUrl");
       const savedOwner = localStorage.getItem("eon.admin.ownerId");
       if (savedApi) setApiBaseUrl(savedApi);
@@ -63,6 +65,7 @@ export default function HomePage() {
 
   useEffect(() => {
     try {
+      if (proxyMode) return;
       localStorage.setItem("eon.admin.apiBaseUrl", apiBaseUrl);
     } catch {
       // ignore
@@ -71,6 +74,7 @@ export default function HomePage() {
 
   useEffect(() => {
     try {
+      if (proxyMode) return;
       localStorage.setItem("eon.admin.ownerId", ownerId);
     } catch {
       // ignore
@@ -239,7 +243,7 @@ export default function HomePage() {
     await loadAll();
   }
 
-  const isConfigured = apiBaseUrl.trim().length > 0 && ownerId.trim().length > 0;
+  const isConfigured = proxyMode ? apiBaseUrl.trim().length > 0 : apiBaseUrl.trim().length > 0 && ownerId.trim().length > 0;
   const statusPill = (() => {
     if (loading) return { dot: "dotWarn", text: "Загрузка..." };
     if (!isConfigured) return { dot: "dotBad", text: "Нужен OWNER_ADMIN_ID" };
@@ -279,11 +283,11 @@ export default function HomePage() {
           <div className="grid2">
             <div>
               <div className="label">API base URL</div>
-              <input className="field" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)} placeholder="http://localhost:3000/v1" />
+              <input className="field" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)} placeholder="http://localhost:3000/v1" disabled={proxyMode} />
             </div>
             <div>
               <div className="label">OWNER_ADMIN_ID</div>
-              <input className="field" value={ownerId} onChange={(e) => setOwnerId(e.target.value)} placeholder="например 815991920" />
+              <input className="field" value={ownerId} onChange={(e) => setOwnerId(e.target.value)} placeholder="например 815991920" disabled={proxyMode} />
             </div>
           </div>
 

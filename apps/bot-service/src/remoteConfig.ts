@@ -1,6 +1,6 @@
 import axios from "axios";
 import { type BotConfigV1, validateBotConfigV1 } from "@eon/shared-domain";
-import { formatAxiosLikeError, logRateLimited } from "./logger";
+import { formatAxiosLikeError } from "./logger";
 
 export type RemoteBotConfigRaw = unknown;
 
@@ -10,11 +10,12 @@ export async function fetchRemoteConfig(apiBaseUrl: string): Promise<BotConfigV1
   return validateBotConfigV1(response.data);
 }
 
-export async function tryFetchRemoteConfig(apiBaseUrl: string): Promise<BotConfigV1 | null> {
+export type RemoteConfigFetchResult = { config: BotConfigV1 } | { config: null; error: string };
+
+export async function tryFetchRemoteConfig(apiBaseUrl: string): Promise<RemoteConfigFetchResult> {
   try {
-    return await fetchRemoteConfig(apiBaseUrl);
+    return { config: await fetchRemoteConfig(apiBaseUrl) };
   } catch (error) {
-    logRateLimited("warn", "remoteConfig.unavailable", `API unavailable → using cached config (${formatAxiosLikeError(error)})`, 60_000);
-    return null;
+    return { config: null, error: formatAxiosLikeError(error) };
   }
 }
